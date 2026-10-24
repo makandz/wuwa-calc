@@ -9,7 +9,7 @@ const roster = new Map([...ALL_TEAMS.flatMap((t) => t.loadouts), ENCORE].map((l)
 const wanted = () => Object.entries(TEAMS).filter(([key, ms]) => teamWanted(key, ms));
 
 test("the supplied limited roster matches the app's names, with standards and free characters included", () => {
-  assert.equal(OWNED_LIMITED_CHARACTERS.size, 24);
+  assert.equal(OWNED_LIMITED_CHARACTERS.size, 26);
   for (const name of OWNED_LIMITED_CHARACTERS) {
     assert.ok(roster.has(name), `${name} exists in the calculator`);
     assert.equal(ownsCharacter(roster.get(name)), true);
@@ -35,6 +35,9 @@ test("ownership requires every teammate and combines with the existing character
     assert.ok(owned.length < original.length);
     assert.ok(owned.every(([, ms]) => teamOwned(ms)));
     assert.ok(owned.some(([, ms]) => ms.some((m) => m.name === "Phrolova")));
+    for (const name of ["Suoming", "Lucilla"]) {
+      assert.ok(owned.some(([, ms]) => ms.some((m) => m.name === name)), `${name} appears with ownership filtering enabled`);
+    }
     resonatorFilters.set("Phrolova", "exclude");
     assert.ok(wanted().length > 0);
     assert.ok(wanted().every(([, ms]) => ms.every((m) => m.name !== "Phrolova")));

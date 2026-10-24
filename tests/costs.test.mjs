@@ -38,7 +38,7 @@ test("the custom default resolves every named override in all its loadout varian
 });
 
 test("unlisted standard and limited characters use S0 without a limited weapon", () => {
-  for (const name of ["Changli", "Encore"]) {
+  for (const name of ["Changli", "Encore", "Suoming", "Lucilla"]) {
     const m = membersNamed(name)[0];
     assert.ok(m);
     assert.deepEqual(sequenceLevels(m, defaultFilters()), [0]);
@@ -170,7 +170,7 @@ test("URL state defaults to Makan's costs and round-trips every explicit preset"
   }
 });
 
-for (const name of ["Denia", "Lucy", "Phrolova"]) {
+for (const name of ["Denia", "Lucy", "Phrolova", "Suoming", "Lucilla"]) {
   test(`a real ${name} team solve uses the requested equipment and sequence levels`, () => {
     const index = ALL_TEAMS.findIndex((t) => t.loadouts.some((l) => l.resonator.name === name)
       && t.loadouts.every((l) => hasBuild(member(l), defaultFilters())));
