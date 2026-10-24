@@ -17,10 +17,10 @@
  *   **Multi-threading** — the SQL hit, x3.7 its own multiplier, and what upgrades the Liberation to
  *   Old Net Deep Dive. The Liberation then ends Compaction and clears TCP.
  *
- * Digital Handshake's +1 TCP/s while on field has no clock to run on here, so the buff Pulse
- * Interference grants is a marker that hands out nothing; her loop reaches exactly 100 TCP without
- * it — the Skill chain's own 24, the 20 the Intro arms onto the Pulse Interference that follows
- * it, and 56 off Basics 2-4.
+ * Digital Handshake, the buff Pulse Interference grants, ticks TCP on its own clock while she is on
+ * field and out of Compaction; her opening chain reaches 100 TCP off the Skill chain's own 24, the
+ * 20 the Intro arms onto the Pulse Interference that follows it, and 56 off Basics 2-4, the ticks
+ * on top.
  *
  * The Liberation's Protocol Interface spends 24 RAM across up to seven Spoofing Programs; the
  * damage-optimal set against a single boss is Ping (2) + Cyberware Malfunction (4) + Breach
@@ -39,7 +39,7 @@
  * (api.wuwalab.com/api/app/characters/lucy) summed the same way, cross-checked against the
  * migrated sheet.
  */
-import { Stat, EnemyStat, Attribute, WeaponType, Type, Cast, Node, Scaling } from "../../engine/stats.js";
+import { Stat, EnemyStat, Attribute, WeaponType, Type, Cast, Node, Scaling, Position } from "../../engine/stats.js";
 import { Buff, Debuff, Talent, Inherent, Sequence, Resonator, Loadout, EchoLoadout, matrix } from "../../engine/gear.js";
 import {
   addStat,
@@ -51,48 +51,76 @@ import {
   runningAction,
   isHeld,
   queue,
-  queueOutro,
+  queueQTE,
   resetCooldown,
   revokeCurrent as revokeCurrent,
   revokeTeam,
-  forte1,
-  forte2,
   frozenStacks,
   stacksOfEnemy,
-  addToCast,
+  addGain,
+  addForte1,
+  forte1,
+  casting,
+  isActive,
 } from "../../engine/context.js";
-import { ActionGroup, Action, Cooldown, Rotation, START_LAST, ECHO, INTRO } from "../../engine/rotation.js";
+import { ActionGroup, Action, Cooldown, Rotation, START_LAST, DODGE } from "../../engine/rotation.js";
 import { applied } from "../../engine/context.js";
-import { applyHack, tuneHackResponse, TUNE_HACK_SHIFTING, TUNE_HACK_INTERFERED } from "../../shared/tunebreak.js";
+import { applyHack, tuneHackResponse, TUNE_HACK_SHIFTING, TUNE_HACK_INTERFERED, TUNE_SHIFTABLE } from "../../shared/tunebreak.js";
 import { SPECTRAL_TRIGGER } from "../../weapons/pistol.js";
 import { NEW_STD_PISTOL, STATIC_MIST } from "../../weapons/standard.js";
+import { THUNDERBOLT, SOLAR_FLAME } from "../../weapons/battlepass.js";
 import { CELESTIAL_LIGHT_2PC, LINGERING_TUNES_2PC, MOONLIT_CLOUDS_2PC } from "../../echoes/jinzhou.js";
-import { ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, NEONLIGHT_LEAP_2PC, REEL_2PC } from "../../echoes/lahairoi.js";
+import { ADAM_SMASHER, SHATTERED_DREAMS_1PC, NEONLIGHT_LEAP_2PC, REEL_2PC, ACTION_ADAM_SMASHER_LUCY } from "../../echoes/lahairoi.js";
 import { mainstatOptions, Mainstat } from "../../shared/mainstats.js";
+import { Echoes } from "../../shared/echoes.js";
 import { substats, highSubs, Substat } from "../../shared/substats.js";
 
 /* ----------------------------------------------------------------------------------- actions */
+
+/** Algorithm Compaction: entered by Deadlock, +65% Spectro DMG Bonus for 8s; either Liberation
+ *  ends it once its hits are in — the last of them Cripple Movement, the program it fires last. */
+const ALGORITHM_COMPACTION = new Buff({
+  name: "Lucy: Algorithm Compaction",
+  duration: 60 * 8,
+  stats: [[Stat.DmgBonus, 65, Attribute.Spectro]],
+  afterAction: () => {
+    if (runningAction(CrippleMovement)) revokeCurrent(ALGORITHM_COMPACTION);
+  },
+});
+
+/** Payload's follow-up "activating Resonance Skill - Pulse Interference": the Skill button's next
+ *  press is Pulse Interference, which consumes it. */
+const PULSE_READY = new Buff({ name: "Lucy: Pulse Interference Ready" });
+
+/** "Press or hold Normal Attack shortly after casting Heavy Attack - Dual Threading to cast Heavy
+ *  Attack - Multi-threading": armed by Dual Threading, consumed by Multi-threading. */
+const MULTI_THREADING_READY = new Buff({ name: "Lucy: Multi-threading Ready" });
+
+/** "When in Algorithm Compaction, after Heavy Attack - Multi-threading is cast, Netrunner is replaced
+ *  with Old Net Deep Dive": armed by Multi-threading, spent by either Liberation. */
+const OLD_NET_READY = new Buff({ name: "Lucy: Old Net Deep Dive Ready", lostWith: ALGORITHM_COMPACTION });
 
 function lucyAction(id: string, def: object): Action {
   return new Action(id, { element: Attribute.Spectro, scaling: Scaling.Atk, ...def });
 }
 
 // --- Locked Thread, the ordinary chain. Everything here banks TCP.
-const BA1 = lucyAction("Basic - Locked Thread 1", { animFrames: 31, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA1 = lucyAction("Basic - Locked Thread 1", { animFrames: 31, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 14, mv: 2430, energy: 38, concerto: 124, offtune: 1504, forte1: 320 },
     { hitFrame: 19, mv: 9719, energy: 152, concerto: 493, offtune: 6016, forte1: 1280 },
   ]});
-const BA2 = lucyAction("Basic - Locked Thread 2", { animFrames: 37, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+// Stage 2 also follows the plunge, Payload's follow-up, Pulse Interference and the Intro, each "press Normal Attack shortly after"
+const BA2 = lucyAction("Basic - Locked Thread 2", { chains: () => [BA1, MA, Skill1, Skill3, Intro], animFrames: 37, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 12, mv: 2066, energy: 32, concerto: 105, offtune: 1279, forte1: 408 },
     { hitFrame: 23, mv: 2005, energy: 32, concerto: 101, offtune: 1241, forte1: 396 },
     { hitFrame: 26, mv: 2005, energy: 32, concerto: 101, offtune: 1241, forte1: 396 },
   ]});
-const BA3 = lucyAction("Basic - Locked Thread 3", { animFrames: 69, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA3 = lucyAction("Basic - Locked Thread 3", { chains: () => [BA2, HA1], animFrames: 69, animPriority: { 0: 4, 47: 3, 69: 2 }, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 10, mv: 3606, energy: 56, concerto: 182, offtune: 2232, forte1: 540 },
     { hitFrame: 31, mv: 3606, energy: 56, concerto: 182, offtune: 2232, forte1: 540 },
     { hitFrame: 53, mv: 4808, energy: 75, concerto: 242, offtune: 2976, forte1: 720 },
   ]});
-const BA4 = lucyAction("Basic - Locked Thread 4", { animFrames: 75, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA4 = lucyAction("Basic - Locked Thread 4", { chains: () => [BA3, DC], animFrames: 75, animPriority: { 0: 4, 63: 2 }, castPriority: 3, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 10, mv: 3102, energy: 48, concerto: 156, offtune: 1920, forte1: 520 },
     { hitFrame: 12, mv: 1551, energy: 24, concerto: 78, offtune: 960, forte1: 260 },
     { hitFrame: 18, mv: 1551, energy: 24, concerto: 78, offtune: 960, forte1: 260 },
@@ -100,21 +128,22 @@ const BA4 = lucyAction("Basic - Locked Thread 4", { animFrames: 75, node: Node.N
     { hitFrame: 40, mv: 3877, energy: 60, concerto: 195, offtune: 2400, forte1: 650 },
     { hitFrame: 63, mv: 3877, energy: 60, concerto: 195, offtune: 2400, forte1: 650 },
   ]});
-const MA = lucyAction("Mid-air - Locked Thread Plunge", { animFrames: 97, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const MA = lucyAction("Mid-air - Locked Thread Plunge", { castPosition: Position.Midair, endPosition: Position.Grounded, animFrames: 97, animPriority: { 85: 2 }, castPriority: 5, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 74, mv: 5816, energy: 113, concerto: 293, offtune: 3600, forte1: 400 },
     { hitFrame: 79, mv: 5816, energy: 113, concerto: 293, offtune: 3600, forte1: 400 },
   ]});
-const DC = lucyAction("Dodge Counter - Locked Thread", { animFrames: 70, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [
+const DC = lucyAction("Dodge Counter - Locked Thread", { chains: [DODGE], animFrames: 70, animPriority: { 0: 4, 48: 3, 70: 2 }, castPriority: 2, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [
     { hitFrame: 10, mv: 5932, energy: 115, concerto: 299, offtune: 3672, forte1: 360 },
     { hitFrame: 31, mv: 7909, energy: 153, concerto: 398, offtune: 4896, forte1: 480 },
     { hitFrame: 54, mv: 5932, energy: 115, concerto: 299, offtune: 3672, forte1: 360 },
   ], castConcerto: 1000});
-const HA1 = lucyAction("Heavy - Locked Thread 1", { animFrames: 48, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const HA1 = lucyAction("Heavy - Locked Thread 1", { animFrames: 48, animPriority: { 0: 3, 48: 2 }, castPriority: 2, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 16, mv: 2210, energy: 43, concerto: 112, offtune: 1368, forte1: 300 },
     { hitFrame: 30, mv: 2210, energy: 43, concerto: 112, offtune: 1368, forte1: 300 },
     { hitFrame: 43, mv: 2947, energy: 57, concerto: 149, offtune: 1824, forte1: 400 },
   ]});
-const HA2 = lucyAction("Heavy - Locked Thread 2", { animFrames: 109, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+// "Hold Normal Attack" after Heavy Stage 1, Basic Stage 3, the Dodge Counter or Payload's follow-up
+const HA2 = lucyAction("Heavy - Locked Thread 2", { chains: () => [HA1, BA3, DC, Skill1], animFrames: 109, animPriority: { 0: 4, 43: 2 }, castPriority: 3, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 8, mv: 5686, energy: 110, concerto: 286, offtune: 3520, forte1: 400 },
     { hitFrame: 17, mv: 5686, energy: 110, concerto: 286, offtune: 3520, forte1: 400 },
     { hitFrame: 25, mv: 1896, energy: 37, concerto: 96, offtune: 1174, forte1: 134 },
@@ -126,52 +155,53 @@ const HA2 = lucyAction("Heavy - Locked Thread 2", { animFrames: 109, node: Node.
 
 // --- Algorithm Compaction replaces the whole chain. Thread Shredding is Basic-cast but Heavy
 //     Attack DMG; the mid-air and dodge counter forms stay Basic. All of it banks Root Access.
-const EBA1 = lucyAction("Basic - Thread Shredding 1", { animFrames: 34, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
+const EBA1 = lucyAction("Basic - Thread Shredding 1", { requireBuff: ALGORITHM_COMPACTION, animFrames: 34, castPriority: 3, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
     { hitFrame: 14, mv: 1949, energy: 28, concerto: 112, offtune: 1120, forte2: 405 },
     { hitFrame: 19, mv: 1949, energy: 28, concerto: 112, offtune: 1120, forte2: 405 },
     { hitFrame: 21, mv: 1949, energy: 28, concerto: 112, offtune: 1120, forte2: 405 },
     { hitFrame: 23, mv: 1949, energy: 28, concerto: 112, offtune: 1120, forte2: 405 },
   ]});
-const EBA2 = lucyAction("Basic - Thread Shredding 2", { animFrames: 55, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
+// Stage 2 also follows each press that names it as its "press Normal Attack shortly after"
+const EBA2 = lucyAction("Basic - Thread Shredding 2", { chains: () => [EBA1, EHA, DualThreading, MultiThreading, MultiThreadingSQL, MultiThreadingSQLS2, Deadlock, EMA, Intro], requireBuff: ALGORITHM_COMPACTION, animFrames: 55, castPriority: 3, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
     { hitFrame: 24, mv: 2227, energy: 32, concerto: 128, offtune: 1280, forte2: 591 },
     { hitFrame: 28, mv: 2227, energy: 32, concerto: 128, offtune: 1280, forte2: 591 },
     { hitFrame: 32, mv: 2227, energy: 32, concerto: 128, offtune: 1280, forte2: 591 },
     { hitFrame: 37, mv: 2227, energy: 32, concerto: 128, offtune: 1280, forte2: 591 },
     { hitFrame: 41, mv: 2227, energy: 32, concerto: 128, offtune: 1280, forte2: 591 },
   ]});
-const EBA3 = lucyAction("Basic - Thread Shredding 3", { animFrames: 67, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
+const EBA3 = lucyAction("Basic - Thread Shredding 3", { chains: () => [EBA2, EDC], requireBuff: ALGORITHM_COMPACTION, animFrames: 67, castPriority: 3, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
     { hitFrame: 4, mv: 2812, energy: 41, concerto: 162, offtune: 1616, forte2: 746 },
     { hitFrame: 6, mv: 2812, energy: 41, concerto: 162, offtune: 1616, forte2: 746 },
     { hitFrame: 33, mv: 2812, energy: 41, concerto: 162, offtune: 1616, forte2: 746 },
     { hitFrame: 45, mv: 2812, energy: 41, concerto: 162, offtune: 1616, forte2: 746 },
     { hitFrame: 49, mv: 2812, energy: 41, concerto: 162, offtune: 1616, forte2: 746 },
   ]});
-const EBA4 = lucyAction("Basic - Thread Shredding 4", { animFrames: 57, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
+const EBA4 = lucyAction("Basic - Thread Shredding 4", { chains: [EBA3], requireBuff: ALGORITHM_COMPACTION, animFrames: 57, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Heavy, bullets: [
     { hitFrame: 3, mv: 2506, energy: 36, concerto: 144, offtune: 1440, forte2: 665 },
     { hitFrame: 6, mv: 2506, energy: 36, concerto: 144, offtune: 1440, forte2: 665 },
     { hitFrame: 9, mv: 2506, energy: 36, concerto: 144, offtune: 1440, forte2: 665 },
     { hitFrame: 13, mv: 2506, energy: 36, concerto: 144, offtune: 1440, forte2: 665 },
     { hitFrame: 26, mv: 2506, energy: 36, concerto: 144, offtune: 1440, forte2: 665 },
   ]});
-const EMA = lucyAction("Mid-air - Algorithm Compaction Plunge", { animFrames: 67, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const EMA = lucyAction("Mid-air - Algorithm Compaction Plunge", { castPosition: Position.Midair, endPosition: Position.Grounded, requireBuff: ALGORITHM_COMPACTION, animFrames: 67, animPriority: { 0: 5, 30: 3 }, castPriority: 3, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 34, mv: 6263, energy: 113, concerto: 293, offtune: 3600, forte1: 1661 },
     { hitFrame: 43, mv: 6263, energy: 113, concerto: 293, offtune: 3600, forte2: 3322, forte1: 1661 },
   ]});
-const EDC = lucyAction("Dodge Counter - Algorithm Compaction", { node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 19485, energy: 350, concerto: 2120, offtune: 11200, forte2: 2955 }] });
-const EHA = lucyAction("Heavy - Single Threading", { animFrames: 67, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const EDC = lucyAction("Dodge Counter - Algorithm Compaction", { chains: [DODGE], castPriority: 8, requireBuff: ALGORITHM_COMPACTION, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 19485, energy: 350, concerto: 2120, offtune: 11200, forte2: 2955 }] });
+const EHA = lucyAction("Heavy - Single Threading", { requireBuff: ALGORITHM_COMPACTION, animFrames: 67, castPriority: 3, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 8, mv: 2339, energy: 34, concerto: 135, offtune: 1344, forte2: 620 },
     { hitFrame: 13, mv: 2339, energy: 34, concerto: 135, offtune: 1344, forte2: 620 },
     { hitFrame: 19, mv: 2339, energy: 34, concerto: 135, offtune: 1344, forte2: 620 },
     { hitFrame: 24, mv: 2339, energy: 34, concerto: 135, offtune: 1344, forte2: 620 },
     { hitFrame: 38, mv: 2339, energy: 34, concerto: 135, offtune: 1344, forte2: 620 },
   ]});
-// Payload's charge, Deadlock and Multi-threading each land a Tune Hack
+// every hit of Deadlock and Multi-threading, and both of Payload's charge, lands a Tune Hack (wuwalab's inflict_hack_shifting)
 const HACKS = { updateDebuffs: () => applyHack() };
 // each gauge's own ceiling is applied on the one cast that spends it rather than on every action
 // — so that cast's own -100 lands exactly on empty, and everything before it still reports what
 // the gauge really banked
-const DualThreading = lucyAction("Heavy - Dual Threading", { minForte2: 10000,
-  animFrames: 67,
+const DualThreading = lucyAction("Heavy - Dual Threading", { minForte2: 10000, requireBuff: ALGORITHM_COMPACTION,
+  animFrames: 67, castPriority: 3,
   node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 10, mv: 3341, energy: 60, offtune: 1344 },
     { hitFrame: 15, mv: 3341, energy: 60, offtune: 1344 },
@@ -179,45 +209,74 @@ const DualThreading = lucyAction("Heavy - Dual Threading", { minForte2: 10000,
     { hitFrame: 26, mv: 3341, energy: 60, offtune: 1344 },
     { hitFrame: 48, mv: 3341, energy: 60, offtune: 1344 },
   ], castConcerto: 800, castForte2: -10000,
+  updateBuffs: () => applyCurrent(MULTI_THREADING_READY, 1),
 });
-/** Multi-threading, at its bare values — the SQL form is the same cast with SQL's own additions on
- *  top (see SQL below), which is how nanoka lists it. */
-const MultiThreading = lucyAction("Heavy - Multi-threading", { animFrames: 61, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
-    { hitFrame: 38, mv: 5965, energy: 75, offtune: 2520 },
-    { hitFrame: 43, mv: 5965, energy: 75, offtune: 2520 },
-    { hitFrame: 49, mv: 5965, energy: 75, offtune: 2520 },
-    { hitFrame: 55, mv: 5965, energy: 75, offtune: 2520 },
-  ], castConcerto: 800, ...HACKS });
-
-// --- Protocol Breach. Payload is the charge; hitting with it automatically triggers the follow-up,
-//     which is in turn what activates Pulse Interference — so the follow-up is queued off the charge
-//     rather than named by a rotation. Deadlock replaces both Payload and Pulse Interference at 100
-//     TCP and is Heavy Attack DMG rather than Resonance Skill DMG.
-const Skill1 = lucyAction("Skill - Payload (Charge)", {
-  animFrames: 55, bullets: [{ hitFrame: 46, mv: 3008, energy: 150, concerto: 240, offtune: 1512, forte1: 360 }], cooldown: 60 * 15,
-  node: Node.Skill, cast: Cast.Skill, type: Type.Skill,
-  // hitting with the charge triggers the follow-up on its own
-  updateDebuffs: () => {
-    applyHack();
-    queue(Skill2);
+/** Multi-threading without SQL: the bare cast (its 20% HP cost is no stat). */
+const MultiThreading = lucyAction("Heavy - Multi-threading", { chains: [DualThreading], animFrames: 61, castPriority: 3, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+    { hitFrame: 38, mv: 5965, energy: 75, offtune: 2520, ...HACKS },
+    { hitFrame: 43, mv: 5965, energy: 75, offtune: 2520, ...HACKS },
+    { hitFrame: 49, mv: 5965, energy: 75, offtune: 2520, ...HACKS },
+    { hitFrame: 55, mv: 5965, energy: 75, offtune: 2520, ...HACKS },
+  ], castConcerto: 800,
+  requireBuff: MULTI_THREADING_READY,
+  updateBuffs: () => {
+    revokeCurrent(MULTI_THREADING_READY);
+    if (isHeld(ALGORITHM_COMPACTION)) applyCurrent(OLD_NET_READY, 1);
   },
 });
-const Skill2 = lucyAction("Skill - Payload (Follow-Up)", { node: Node.Skill, cast: Cast.Skill, type: Type.Skill, bullets: [{ hitFrame: 0, mv: 7017, energy: 350, concerto: 560, offtune: 3528, forte1: 840 }] });
+/** Multi-threading spending SQL: nanoka's own rows, 220.68% per hit (x3.7), energy 2.5, off-tune 16920. */
+const MultiThreadingSQL = MultiThreading.variant("Heavy - Multi-threading (SQL)", { bullets: [
+    { hitFrame: 38, mv: 22068, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 43, mv: 22068, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 49, mv: 22068, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 55, mv: 22068, energy: 250, offtune: 16920, ...HACKS },
+  ]});
+/** The same under S2's +560%: nanoka's 393.65% per hit (x6.6), the SQL row's energy and off-tune. */
+const MultiThreadingSQLS2 = MultiThreading.variant("Heavy - Multi-threading (SQL S2)", { bullets: [
+    { hitFrame: 38, mv: 39365, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 43, mv: 39365, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 49, mv: 39365, energy: 250, offtune: 16920, ...HACKS },
+    { hitFrame: 55, mv: 39365, energy: 250, offtune: 16920, ...HACKS },
+  ]});
+/** The Multi-threading a rotation writes: the SQL form while she holds SQL, S2's once S2 is held. */
+const MultiThreadingResolver = new Action("Multi-threading Resolver", {
+  resolve: () => (!isHeld(SQL) ? MultiThreading : isHeld(LC_S2) ? MultiThreadingSQLS2 : MultiThreadingSQL),
+});
+
+// --- Protocol Breach. Payload is the charge (20.05%+10.03%, each laying Hack - Shifting) and the
+//     follow-up it triggers on hit (40.09%+10.03%+20.05%), one press as wuwalab plays it. Deadlock
+//     replaces both Payload and Pulse Interference at 100 TCP and is Heavy Attack DMG.
+const Skill1 = lucyAction("Skill - Payload", {
+  animFrames: 55, animPriority: { 26: 6, 34: 2, 53: 2 }, castPriority: 4, cooldown: 60 * 15, maxForte1: 9999,
+  node: Node.Skill, cast: Cast.Skill, type: Type.Skill, bullets: [
+    { hitFrame: 16, mv: 2005, energy: 100, concerto: 160, offtune: 1008, forte1: 240, ...HACKS },
+    { hitFrame: 20, mv: 1003, energy: 50, concerto: 80, offtune: 504, forte1: 120, ...HACKS },
+    // the follow-up's own unlock_pulse_interference, ahead of its hit
+    { hitFrame: 26, element: null, type: null, subtype: null, updateDebuffs: () => applyCurrent(PULSE_READY, 1) },
+    { hitFrame: 30, mv: 4009, energy: 200, concerto: 320, offtune: 2016, forte1: 480 },
+    { hitFrame: 42, mv: 1003, energy: 50, concerto: 80, offtune: 504, forte1: 120 },
+    { hitFrame: 46, mv: 2005, energy: 100, concerto: 160, offtune: 1008, forte1: 240 },
+  ],
+});
 const Skill3 = lucyAction("Skill - Pulse Interference", {
-  animFrames: 156,
+  animFrames: 156, animPriority: { 0: 5, 156: 2 }, castPriority: 6,
   node: Node.Skill, cast: Cast.Skill, type: Type.Skill, bullets: [
     { hitFrame: 2, mv: 3086, energy: 50, offtune: 1552, forte1: 120 },
     { hitFrame: 12, mv: 3086, energy: 50, offtune: 1552, forte1: 120 },
     { hitFrame: 114, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
-    { hitFrame: 121, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
+    { hitFrame: 121, commitFrame: 114, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
+    { hitFrame: 128, commitFrame: 114, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
     { hitFrame: 128, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
-    { hitFrame: 128, mv: 6172, energy: 100, offtune: 3104, forte1: 240 },
-  ], castConcerto: 800,
-  updateBuffs: () => applyCurrent(DIGITAL_HANDSHAKE, 1),  // DIGITAL_HANDSHAKE grants no stat and nothing reads it
+  ], castConcerto: 800, maxForte1: 9999,
+  requireBuff: PULSE_READY,
+  updateBuffs: () => {
+    revokeCurrent(PULSE_READY);
+    applyCurrent(DIGITAL_HANDSHAKE, 1);
+  },
 });
 const Deadlock = lucyAction("Skill - Deadlock", { minForte1: 10000,
-  animFrames: 72, timestop: 60, motionStop: 36, cooldown: 60 * 14,
-  node: Node.Skill, cast: Cast.Skill, type: Type.Heavy, bullets: [{ hitFrame: 35, mv: 5170, energy: 200 }, { hitFrame: 64, mv: 20677, energy: 800 }], castConcerto: 800, castForte1: -10000, ...HACKS,
+  animFrames: 72, animPriority: { 0: 10, 72: 4 }, castPriority: 5, timestop: [0, 60], motionStop: [0, 36], cooldown: 60 * 14,
+  node: Node.Skill, cast: Cast.Skill, type: Type.Heavy, bullets: [{ hitFrame: 35, mv: 5170, energy: 200, ...HACKS }, { hitFrame: 64, mv: 20677, energy: 800, ...HACKS }], castConcerto: 800, castForte1: -10000,
   updateBuffs: () => {
     // enters Algorithm Compaction with one SQL; casting it again inside the state grants neither
     if (!isHeld(ALGORITHM_COMPACTION)) { applyCurrent(ALGORITHM_COMPACTION, 1); applyCurrent(SQL, 1); }
@@ -233,7 +292,10 @@ const LIB_CD = new Cooldown({ frames: 60 * 25 });
 const OVERRIDE = {
   resetForte1: true,
   cooldown: LIB_CD,
-  updateBuffs: () => resetCooldown(Deadlock),
+  updateBuffs: () => {
+    resetCooldown(Deadlock);
+    revokeCurrent(OLD_NET_READY);
+  },
   // the Spoofing debuffs and programs come off the Liberation's hit, ahead of its own stats
   updateDebuffs: () => {
     applyEnemy(CYBERWARE_MALFUNCTION, 1);
@@ -244,12 +306,13 @@ const OVERRIDE = {
   },
 };
 const Lib = lucyAction("Liberation - Netrunner: Override", {
-  animFrames: 262, timestop: 202, motionStop: 202,
-  node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [{ hitFrame: 251, mv: 89465, offtune: 43200 }], castConcerto: 2000, resetEnergy: true, ...OVERRIDE, resetForte1: true
+  animFrames: 262, animPriority: { 246: 2 }, castPriority: 10, timestop: [0, 202], motionStop: [0, 202],
+  node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [{ hitFrame: 251, commitFrame: 239, mv: 89465, offtune: 43200 }], castConcerto: 2000, castEnergy: -12500, ...OVERRIDE, resetForte1: true
 });
 const ELib = lucyAction("Liberation - Old Net Deep Dive: Override", {
-  animFrames: 262, timestop: 262, motionStop: 262,
-  node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [{ hitFrame: 251, mv: 178929, offtune: 86400 }], castConcerto: 2000, resetEnergy: true, ...OVERRIDE, resetForte1: true
+  requireBuff: OLD_NET_READY,
+  animFrames: 262, animPriority: { 246: 2 }, castPriority: 10, timestop: [0, 262], motionStop: [0, 262],
+  node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [{ hitFrame: 251, commitFrame: 239, mv: 178929, offtune: 86400 }], castConcerto: 2000, castEnergy: -12500, ...OVERRIDE, resetForte1: true
 });
 // queued off the Liberation rather than played, but active casts all the same — she fires them from
 // inside her own Protocol Interface, on field, and marking them inactive would have her drop every
@@ -261,14 +324,14 @@ const CrippleMovement = lucyAction("Liberation - Spoofing Program: Cripple Movem
 });
 
 const Intro = lucyAction("Intro - Outdated Hallucination", {
-  animFrames: 57, prioFrames: 45, motionStop: 28,
+  endPosition: Position.Grounded, animFrames: 57, noSwapFrames: 54, animPriority: { 45: 2 }, castPriority: 11, motionStop: [5, 32],
   node: Node.Intro, cast: Cast.Intro, type: Type.Intro, bullets: [{ hitFrame: 34, mv: 6914, energy: 500, offtune: 4280 }, { hitFrame: 39, mv: 6914, energy: 500, offtune: 4280 }], castConcerto: 1000,
   updateBuffs: () => applyCurrent(OUTDATED_HALLUCINATION, 1),
 });
 const Outro = lucyAction("Outro - Countermeasure Program", {
   animFrames: 0,
   cast: Cast.Outro, minConcerto: 10000, castConcerto: -10000,
-  updateBuffs: () => { queueOutro(COUNTERMEASURE_HANDOFF); applyTeam(COUNTERMEASURE_MARKER, 1); }
+  updateBuffs: () => { queueQTE(COUNTERMEASURE_HANDOFF); applyTeam(COUNTERMEASURE_MARKER, 1); }
 });
 
 /** Her answer to a Hack break — tune-scaled, so it reads Tune Break Boost and nothing else.
@@ -278,7 +341,7 @@ const Outro = lucyAction("Outro - Countermeasure Program", {
  *  holds revoke itself the moment a break went off. */
 const DataCrash = lucyAction("Tune Hack Response - Data Crash", {
   animFrames: 0,
-  node: Node.Forte, type: Type.Hack, scaling: Scaling.Tune, bullets: [
+  node: Node.Forte, cast: Cast.TuneBreak, type: Type.Hack, scaling: Scaling.Tune, bullets: [
     { hitFrame: 0, mv: 109419 },
     { hitFrame: 0, mv: 6839 },
     { hitFrame: 0, mv: 6839 },
@@ -289,55 +352,41 @@ const DataCrash = lucyAction("Tune Hack Response - Data Crash", {
 
 /* ------------------------------------------------------------------------------------- buffs */
 
-/** Algorithm Compaction: entered by Deadlock, +65% Spectro DMG Bonus for 8s; either Liberation
- *  ends it once its hits are in — the last of them Cripple Movement, the program it fires last. */
-const ALGORITHM_COMPACTION = new Buff({
-  name: "Lucy: Algorithm Compaction",
-  duration: 60 * 8,
-  stats: [[Stat.DmgBonus, 65, Attribute.Spectro]],
-  afterAction: () => { if (runningAction(CrippleMovement)) revokeCurrent(ALGORITHM_COMPACTION); },
-});
-
-/** SQL: one stack, banked on entering Algorithm Compaction and spent by the next Multi-threading
- *  for +270% of its own DMG Multiplier — nanoka lists the SQL form as its own rows, at x3.7 the
- *  multiplier with its own energy and off-tune, so those two deltas ride here as well. Without it
- *  the cast instead costs 20% of her current HP, which is no stat.
- *
- *  S2 raises that increase to +560%, and nanoka carries both: the cast is four hits, 220.68% each
- *  under SQL (x3.7 its own 238.6%) and 393.65% each under S2's (x6.6). */
+/** SQL: one stack, banked on entering Algorithm Compaction and spent by the next Multi-threading,
+ *  which it turns into the SQL form (+270%, S2's +560%) through MultiThreadingResolver. */
 const SQL = new Buff({
   name: "Lucy: SQL",
-  updateBuffs: () => {
-    if (runningAction(MultiThreading)) addToCast({ energy: 700 });
+  afterAction: () => {
+    if (runningAction(MultiThreadingSQL) || runningAction(MultiThreadingSQLS2)) revokeCurrent(SQL);
   },
-  // the off-tune is the four hits' own, 14,400 apiece
-  applyStats: () => {
-    if (!runningAction(MultiThreading)) return;
-    addStat(Stat.MulMv, isHeld(LC_S2) ? 560 : 270);
-    addStat(Stat.AddOfftune, 14400);
-  },
-  afterAction: () => { if (runningAction(MultiThreading)) revokeCurrent(SQL); },
 });
 
-/** Outdated Hallucination arms it: after her Intro, the *next* Pulse Interference grants 20.6 TCP on
- *  top of the 12 the cast banks itself. Spent as it pays, so a second Pulse Interference before the
+/** Outdated Hallucination arms it: after her Intro, the *next* Pulse Interference grants 20 TCP on
+ *  top of the 12.6 the cast banks itself. Spent as it pays, so a second Pulse Interference before the
  *  next Intro gets nothing. */
 const OUTDATED_HALLUCINATION = new Buff({
   name: "Lucy: Outdated Hallucination",
   updateBuffs: () => {
     if (!runningAction(Skill3)) return;
-    addToCast({ forte1: 2060 });
+    addGain({ forte1: 2000 });
     revokeCurrent(OUTDATED_HALLUCINATION);
   },
 });
 
-/** Digital Handshake: granted by Pulse Interference, and while she is on field and out of
- *  Algorithm Compaction it feeds her 1 TCP a second — a clock this engine has none of, so it hands
- *  out nothing and is here as the marker it is. With no TCP to give, neither condition that would
- *  end it (reaching 100 TCP, or either Liberation) has anything to end, so it simply stands. */
-const DIGITAL_HANDSHAKE = new Buff({ 
+/** Digital Handshake: granted by Pulse Interference, "when Lucy is not in Algorithm Compaction and
+ *  is the active Resonator, she gains TCP every second" — wuwalab's 0.6 TCP resource gain, 60f in,
+ *  every 60f, its clock standing still while she is off field or in Compaction. Removed when TCP
+ *  reaches 100 or either Liberation is cast. */
+const DIGITAL_HANDSHAKE: Buff = new Buff({
   name: "Lucy: Digital Handshake",
-  updateBuffs: () => { if (runningAction(Outro)) addToCast({ forte1: 1200 }); }, // approximation
+  tick: {
+    every: () => (isActive() && !isHeld(ALGORITHM_COMPACTION) ? 60 : 0),
+    fire: () => {
+      if (addForte1(60) >= 10000) revokeCurrent(DIGITAL_HANDSHAKE);
+    },
+  },
+  updateBuffs: () => { if (casting(Cast.Liberation)) revokeCurrent(DIGITAL_HANDSHAKE); },
+  afterHit: () => { if (forte1() >= 10000) revokeCurrent(DIGITAL_HANDSHAKE); },
 });
 
 /** Spoofing Program: Cyberware Malfunction — marked targets take 5% more DMG for 30s, so permanent
@@ -481,7 +530,7 @@ const LC_INHERENT_2 = new Inherent({ name: "Inherent: Function Cracking" });
 
 const LUCY_TALENTS = new Talent({
   name: "Lucy: Talents",
-  stats: [[Stat.BonusAtk, 12], [Stat.CritRate, 8]],
+  stats: [[Stat.BonusAtk, 11.9999997], [Stat.CritRate, 8]],
 });
 
 const LUCY_MATRIX = matrix("Lucy", 0, {
@@ -489,7 +538,9 @@ const LUCY_MATRIX = matrix("Lucy", 0, {
 });
 
 export const LUCY_RESONATOR = new Resonator({
+  id: 1511,
   name: "Lucy",
+  combatStart: () => applyEnemy(TUNE_SHIFTABLE, 1),
   matrix: LUCY_MATRIX,
   talent: LUCY_TALENTS,
   inherent1: LC_INHERENT_1,
@@ -498,6 +549,9 @@ export const LUCY_RESONATOR = new Resonator({
   weapon: WeaponType.Pistols,
   color: "#efe8de",
   intro: Intro,
+  // Algorithm Compaction replaces the Basic and Mid-air Attacks
+  swapIn: () => (isHeld(ALGORITHM_COMPACTION) ? EBA1 : BA1),
+  swapInAir: () => (isHeld(ALGORITHM_COMPACTION) ? EMA : MA),
   maxEnergy: 12500,
   forteScale: [0.01, 0.01, 1, 1, 1],
   maxForte1: 10000,
@@ -508,14 +562,14 @@ export const LUCY_RESONATOR = new Resonator({
   stats: [
     [Stat.BaseHp, 11025], [Stat.BaseAtk, 425], [Stat.BaseDef, 1148.8868],
     // the flat 10 every tune-break-era resonator carries (nanoka's own weakness_mastery)
-    [Stat.Tbb, 10],
+    [Stat.TBB, 10],
   ],
 });
 
 /* ---------------------------------------------------------------------------------- rotation */
 
-/** Intro straight into Basics 2-4 (the Intro's own follow-up is Stage 2), then Payload — whose
- *  follow-up triggers itself — and Pulse Interference, which cashes the 20 TCP the Intro armed onto
+/** Intro straight into Basics 2-4 (the Intro's own follow-up is Stage 2), then Payload — charge
+ *  and follow-up in one press — and Pulse Interference, which cashes the 20 TCP the Intro armed onto
  *  it and lands the bar on exactly 100. Deadlock spends that for Algorithm Compaction and an SQL;
  *  Thread Shredding 2-4 bank 100.1 Root Access, Dual Threading spends it, Multi-threading cashes
  *  the SQL and upgrades the Liberation, and Old Net Deep Dive closes the state and drops the
@@ -526,21 +580,22 @@ const BA234 = new ActionGroup("Basic - Locked Thread 234", [BA2, BA3, BA4]);
 const EBA234 = new ActionGroup("Basic - Thread Shredding 234", [EBA2, EBA3, EBA4]);
 
 const LC_ROTATION = new Rotation([
-  START_LAST, Lib, ECHO.instaSwap(),
-  INTRO, BA234.cancel(), Skill1, Skill3.mashCancel(),
+  START_LAST, BA1.instaCancel(), Lib, ACTION_ADAM_SMASHER_LUCY, HA1.instaSwap(),
+
+  Intro.inLastSlot(), BA234.cancel(), Skill1, Skill3,
   Deadlock, EBA234.holdCancel(),
-  DualThreading, MultiThreading, ECHO,
+  DualThreading, MultiThreadingResolver, ACTION_ADAM_SMASHER_LUCY,
   ELib, HA1, HA2.instaSwap(), Outro,
 ]);
 
 /** Adam Smasher carries its own 1pc set, so the other four echoes run two ordinary 2-piece sets
  *  instead of a 5pc — ATK and Spectro. */
 const LC_ECHOES = [
-  new EchoLoadout(ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, NEONLIGHT_LEAP_2PC),
-  new EchoLoadout(ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, LINGERING_TUNES_2PC),
-  new EchoLoadout(ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, LINGERING_TUNES_2PC, REEL_2PC),
-  new EchoLoadout(ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, MOONLIT_CLOUDS_2PC),
-  new EchoLoadout(ADAM_SMASHER_LUCY, SHATTERED_DREAMS_1PC, LINGERING_TUNES_2PC, MOONLIT_CLOUDS_2PC),
+  new EchoLoadout(ADAM_SMASHER, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, NEONLIGHT_LEAP_2PC),
+  new EchoLoadout(ADAM_SMASHER, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, LINGERING_TUNES_2PC),
+  new EchoLoadout(ADAM_SMASHER, SHATTERED_DREAMS_1PC, LINGERING_TUNES_2PC, REEL_2PC),
+  new EchoLoadout(ADAM_SMASHER, SHATTERED_DREAMS_1PC, CELESTIAL_LIGHT_2PC, MOONLIT_CLOUDS_2PC),
+  new EchoLoadout(ADAM_SMASHER, SHATTERED_DREAMS_1PC, LINGERING_TUNES_2PC, MOONLIT_CLOUDS_2PC),
 ];
 
 /** Matrix — Function Cracking: her Resonance Skills mark an Overlord/Calamity target with Botnet
@@ -564,12 +619,15 @@ const NETWORK_BACKDOOR = new Buff({
 
 
 export const LUCY = new Loadout({
+  id: 15111,
   resonator: LUCY_RESONATOR,
-  weapons: [SPECTRAL_TRIGGER, NEW_STD_PISTOL, STATIC_MIST],
-  echoLoadouts: LC_ECHOES,
+  weapons: [SPECTRAL_TRIGGER, NEW_STD_PISTOL, STATIC_MIST, THUNDERBOLT, SOLAR_FLAME],
+  echoes: new Echoes({
+    sets: LC_ECHOES,
+    mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Spectro3, Mainstat.ATK1),
+    substats: substats(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
+    highSubstats: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill, Substat.Basic),
+  }),
   sequences: [LC_S1, LC_S2, LC_S3, LC_S4, LC_S5, LC_S6],
-  mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Spectro3, Mainstat.ATK1),
-  substat: substats(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
-  highSubstat: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
     rotation: LC_ROTATION,
 });

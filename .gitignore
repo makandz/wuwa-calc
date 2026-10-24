@@ -6,3 +6,5 @@ __pycache__/
 dist/*
 # Precomputed calculations are versioned because npm run build does not regenerate them.
 !dist/solves/
+
+tuning/out/

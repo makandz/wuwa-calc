@@ -33,6 +33,7 @@ Rotations that require higher sequences or cannot meet energy or Crit Rate requi
 omitted from this preset. This includes Jianxin's S2 rotation and Roccia's S6-only variant.
 
 Character portraits come from Encore's `RoleHeadIcon` field and ship in `assets/portraits/`.
+Lily currently displays her name without a portrait because Encore has not published one.
 Run `npm run portraits:sync` to refresh the images and `src/page/portrait-assets.ts`, then rebuild.
 Image filenames contain a SHA-256 content hash, so changed images get a new cache key. The page
 stores loaded portraits in the `wuwa-character-portraits-v1` Cache Storage cache and reads that
@@ -56,18 +57,18 @@ support takes the place of an unowned default support within each interchangeabl
 | `src/engine/stats.ts` | the stat vocabulary (`Stat`, `Attribute`, `Type1`/`Type2`, `Cast`, `Node`, `Scaling`) |
 | `src/engine/damage.ts` | the damage formula |
 | `src/engine/rotation.ts` | `Rotation` and the scheduler that decides whose turn it is |
-| `src/teams.ts` | the `LOADOUTS` registry and every team the comparison table runs (`ALL_TEAMS`) |
-| `src/solver.ts` | the filter/pick vocabulary and the build search; also the Worker entry point |
+| `src/resonators/teams.ts` | the `LOADOUTS` registry and every team the comparison table runs (`ALL_TEAMS`) |
+| `src/solve/solver.ts` | the filter/pick vocabulary and the build search; also the Worker entry point |
 | `src/ownership.ts` | Makan's roster and the saved ownership checkbox preference |
 | `src/costs.ts` | the default preset and Makan's per-character sequence, weapon and refinement overrides |
-| `src/teamrun.ts` | the DOM-free engine run the search scores (`runTeam`) and the lines/totals read off it |
-| `src/display.ts` | turns a run into the report/hover-trace data the page renders |
-| `src/precompute.ts` | solves the whole roster offline into `dist/solves/`, one file per filter state, so the published site opens with no search; each key is solved once and `index.json` names the files a state needs |
+| `src/solve/teamrun.ts` | the DOM-free engine run the search scores (`runTeam`) and the lines/totals read off it |
+| `src/page/display.ts` | turns a run into the report/hover-trace data the page renders |
+| `src/solve/precompute.ts` | solves the whole roster offline into `dist/solves/`, one file per filter state, so the published site opens with no search; each key is solved once and `index.json` names the files a state needs |
 | `src/shared/mainstats.ts` / `substats.ts` | echo main-stat builds (`mainstats()`/`mainstatOptions()`) and substat spreads (`substats()`/`chem()`) |
 | `src/resonators/<attribute>/*.ts` | one folder per attribute (`aero`, `electro`, `fusion`, `glacio`, `havoc`, `spectro`): one file per resonator — actions, buffs, the Resonator itself, talents, inherent skills, sequences, a sample rotation, a loadout |
 | `src/echoes/<region>.ts` | mainslot echoes and sonata sets, one file per region that introduced them (grouped by region, unlike the resonator folders; Black Shores' Fallacy lives in `jinzhou.ts`) |
 | `src/weapons/*.ts` | signature and standard weapons, grouped by weapon type |
-| `src/index.ts` | the page's entry: boot, routing, the loading overlay, the solve/run passes |
+| `src/page/index.ts` | the page's entry: boot, routing, the loading overlay, the solve/run passes |
 | `src/page/model.ts` | page state with no DOM: teams, filter maps, which rows exist, caches, saved solves, the URL hash |
 | `src/page/panels.ts` | hover-panel markup (stat traces, buffs, breakdowns, loadouts, the DPR table) and their wiring |
 | `src/page/filterbar.ts` | the filter aside: option/help boxes, chips, the search bar |
@@ -206,7 +207,7 @@ there, note the fallback used. Never invent a missing forte value.
 Export the `Loadout` as the resonator's bare name (`LUPA`; a mode variant as `LYNAE_RUPTURE`), the
 `Resonator` itself as `LUPA_RESONATOR` — a `Loadout` names the resonator, its talent, both inherents, every viable
 weapon (best signature first, best standard second), the `EchoLoadout` options, the main-stat
-builds, a substat spread, and the `Rotation`. Then register it in `src/teams.ts`: add it
+builds, a substat spread, and the `Rotation`. Then register it in `src/resonators/teams.ts`: add it
 to `LOADOUTS` (which is also how a Worker resolves a team it was handed by name) and, once it has
 a team to run in, to `TEAMS`. A fully-ported resonator with no team yet is normal, not a stub.
 

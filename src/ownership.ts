@@ -1,7 +1,7 @@
 /** Makan's roster and the main screen's ownership preference. */
 import { Tier } from "./engine/stats.js";
 import type { Resonator } from "./engine/gear.js";
-import { primaryTeamsWhere, teamKey } from "./teams.js";
+import { primaryTeamsWhere, teamKey } from "./resonators/teams.js";
 
 /** Standard characters, four-stars and Rovers are included by their existing tier below. */
 export const OWNED_LIMITED_CHARACTERS: ReadonlySet<string> = new Set([

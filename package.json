@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "description": "Stat, buff and gear system. TypeScript compiled with tsc; esbuild only concatenates tsc's output into the two files the page loads (see dev.py). No runtime dependencies.",
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/page/index.js",
   "scripts": {
     "build": "tsc && npm run bundle",
     "test": "node --test tests/*.test.mjs",
     "watch": "tsc --watch",
     "dev": "python dev.py",
-    "precompute": "node dist/src/precompute.js",
+    "precompute": "node dist/src/solve/precompute.js",
     "portraits:sync": "node scripts/sync-portraits.mjs",
-    "bundle": "node -e \"require('node:fs').rmSync('dist/bundle',{recursive:true,force:true})\" && esbuild dist/src/index.js dist/src/solver.js --bundle --splitting --format=esm --outdir=dist/bundle --outbase=dist/src"
+    "bundle": "node -e \"require('node:fs').rmSync('dist/bundle',{recursive:true,force:true})\" && esbuild dist/src/page/index.js dist/src/solve/solver.js --bundle --splitting --format=esm --outdir=dist/bundle --entry-names=[name]"
   },
   "repository": {
     "type": "git",

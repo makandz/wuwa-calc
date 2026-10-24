@@ -1,32 +1,47 @@
-#
-jingran ba4/skill2 cancel
 
 #
-denia midair
+add sigrika heavy spam
 
 #
-make embed show team + dpr if you link a team
+add the current graph/chart on the team page to the url so we can share it
 
 #
-implement priorities to all actions
-enforce cancelling after priority etc
+find correct input buffers and hold buffer frames
+find tb timeout frames
+currently tb not allowed after mash,hold,
+.tbCancel(), which will take priority for tb use for that section of the rotation (the first one after offtune is full takes the priority)
 
 #
-import bullet commit frames from anto when it updates
-add echo frames
+check echo cast and animation priorities
+psuedo transform 4 or less?
+import formrender frames
 
 #
-make echo actions resolvers that play only if their mainslot echo is equipped (create a template one for all echo actions to use)
-mainslot no longer points to echo, the echo action points to the required mainslot
-delete the current ECHO placeholder action and related logic, replace them with every mainslot that character may have.
+create forte bar UI?
+create negative status stack UI?
 
 #
-better wait Xs visual
+RDPR view/compare
+crit fish distribution (optimize build for a level of fishing)
 
 #
-get mornye field buff time (and for other fields/buff starts)
+add resonator, weapon, sonata, attribute, damage type, images
 
-# standard 5 star/4 star
+#
+show all teams
+show best supports
+show best team per mdps
+
+
+rank teams by substats gains or sequences gains or weapon gains etc
+rank teams by mdps sig gain
+rank teams by best subdps sig gain
+rank by best high invest substats gain
+rank by best sequence gain
+have it re order teams?
+add costs and max cost filter and ranking
+
+# resonators to implement
 calcharo
 lingyang
 chixia
@@ -35,14 +50,9 @@ youhu
 baizhi
 luumi
 taoqi
-yangyang
-aalto 
+aalto
 
-#
-rank teams by substats gains or sequences gains or weapon gains etc
-rank teams by mdps sig gain
-rank teams by best subdps sig gain
-rank by best high invest substats gain
-rank by best sequence gain
-have it re order teams?
-add costs and max cost filter and ranking
+# need rotation/team
+yangyang
+encore
+havoc rover

@@ -22,7 +22,7 @@
  * "queued and owned by the kit that earned it" shape as Lupa's Set the Arena Ablaze; the 1s
  * trigger ICD isn't modelled.
  */
-import { Stat, Attribute, WeaponType, Type, Subtype, Cast, Node, Scaling } from "../../engine/stats.js";
+import { Stat, Attribute, WeaponType, Type, Subtype, Cast, Node, Scaling, Position } from "../../engine/stats.js";
 import { Buff, Talent, Inherent, Resonator, Loadout, EchoLoadout, Sequence, matrix } from "../../engine/gear.js";
 import {
   applyCurrent,
@@ -37,20 +37,25 @@ import {
   queue,
   queueOn,
   triggeredAction,
-  queueOutro,
+  queueQTE,
   isActive,
   applyTeam,
   frozenStacks,
   onCast,
-  addToCast,
+  addGain,
 } from "../../engine/context.js";
-import { Action, Cooldown, Rotation, START_LAST, ECHO, ActionField, INTRO } from "../../engine/rotation.js";
+import { Action, Cooldown, Rotation, START_LAST, ActionField, DODGE } from "../../engine/rotation.js";
 import { VERDANT_SUMMIT } from "../../weapons/broadblade.js";
 import { NEW_STD_BRAUDBLADE, LUSTROUS_RAZOR } from "../../weapons/standard.js";
-import { NM_FEILIAN_BERINGAL, SIERRA_GALE_5PC } from "../../echoes/jinzhou.js";
+import { AUTUMNTRACE, AUREATE_ZENITH } from "../../weapons/battlepass.js";
+import { NM_FEILIAN_BERINGAL, SIERRA_GALE_5PC, ACTION_NM_FEILIAN_BERINGAL } from "../../echoes/jinzhou.js";
 import { mainstatOptions, Mainstat } from "../../shared/mainstats.js";
+import { Echoes } from "../../shared/echoes.js";
 import { substats, highSubs, Substat } from "../../shared/substats.js";
-import { NM_KELPIE, WINDWARD_5PC } from "../../echoes/rinascita.js";
+import { NM_KELPIE, WINDWARD_5PC, ACTION_NM_KELPIE } from "../../echoes/rinascita.js";
+import { CARTETHYIA_RESONATOR } from "./cartethyia.js";
+import { CIACCONA_RESONATOR } from "./ciaccona.js";
+import { ROVER_AERO_RESONATOR } from "./rover_aero.js";
 
 /* ----------------------------------------------------------------------------------- actions */
 
@@ -59,10 +64,10 @@ function jiyanAction(id: string, def: object): Action {
 }
 
 // --- basics, heavies, mid-air, dodge counter (Lone Lance) — every hit feeds Resolve TODO get actual forte values
-const BA1 = jiyanAction("Basic - Lone Lance 1", { animFrames: 14, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 14, mv: 7316, energy: 92, concerto: 184, offtune: 2944 }] });
-const BA2 = jiyanAction("Basic - Lone Lance 2", { animFrames: 24, bullets: [{ hitFrame: 23, mv: 4373, energy: 55, concerto: 110, offtune: 1760 }], node: Node.Normal, cast: Cast.Basic, type: Type.Basic});
+const BA1 = jiyanAction("Basic - Lone Lance 1", { animFrames: 14, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 14, mv: 7316, energy: 92, concerto: 184, offtune: 2944 }] });
+const BA2 = jiyanAction("Basic - Lone Lance 2", { chains: [BA1], animFrames: 24, castPriority: 2, bullets: [{ hitFrame: 23, mv: 4373, energy: 55, concerto: 110, offtune: 1760 }], node: Node.Normal, cast: Cast.Basic, type: Type.Basic});
 // PLACEHOLDER FRAMES
-const BA3 = jiyanAction("Basic - Lone Lance 3", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA3 = jiyanAction("Basic - Lone Lance 3", { chains: [BA2], castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 0, mv: 3638, energy: 45, concerto: 91, offtune: 1464 },
     { hitFrame: 0, mv: 3638, energy: 45, concerto: 91, offtune: 1464 },
     { hitFrame: 0, mv: 3638, energy: 45, concerto: 91, offtune: 1464 },
@@ -70,12 +75,12 @@ const BA3 = jiyanAction("Basic - Lone Lance 3", { node: Node.Normal, cast: Cast.
     { hitFrame: 0, mv: 3638, energy: 45, concerto: 91, offtune: 1464 },
   ]});
 // PLACEHOLDER FRAMES
-const BA4 = jiyanAction("Basic - Lone Lance 4", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA4 = jiyanAction("Basic - Lone Lance 4", { chains: [BA3], castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 0, mv: 6620, energy: 83, concerto: 166, offtune: 2664 },
     { hitFrame: 0, mv: 6620, energy: 83, concerto: 166, offtune: 2664 },
   ]});
 // PLACEHOLDER FRAMES
-const BA5 = jiyanAction("Basic - Lone Lance 5", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA5 = jiyanAction("Basic - Lone Lance 5", { chains: [BA4], castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 0, mv: 2360, energy: 29, concerto: 59, offtune: 950 },
     { hitFrame: 0, mv: 2360, energy: 29, concerto: 59, offtune: 950 },
     { hitFrame: 0, mv: 2360, energy: 29, concerto: 59, offtune: 950 },
@@ -88,7 +93,7 @@ const BA5 = jiyanAction("Basic - Lone Lance 5", { node: Node.Normal, cast: Cast.
   ]});
 
 // PLACEHOLDER FRAMES
-const HA = jiyanAction("Heavy - Lone Lance", { node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const HA = jiyanAction("Heavy - Lone Lance", { castPriority: 2, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 0, mv: 2220, energy: 27, concerto: 55, offtune: 894 },
     { hitFrame: 0, mv: 2220, energy: 27, concerto: 55, offtune: 894 },
     { hitFrame: 0, mv: 2220, energy: 27, concerto: 55, offtune: 894 },
@@ -96,26 +101,27 @@ const HA = jiyanAction("Heavy - Lone Lance", { node: Node.Normal, cast: Cast.Hea
     { hitFrame: 0, mv: 2220, energy: 27, concerto: 55, offtune: 894 },
     { hitFrame: 0, mv: 2220, energy: 27, concerto: 55, offtune: 894 },
   ]});
-/** Windborne Strike, holding Basic during the Heavy Attack. */
-const HA2 = jiyanAction("Heavy - Windborne Strike", { node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 10596, energy: 133, concerto: 266, offtune: 4264 }] });
+/** Windborne Strike, holding Basic during the Heavy Attack — it leaves him airborne, since
+ *  Banner of Triumph (a mid-air attack) follows it directly. */
+const HA2 = jiyanAction("Heavy - Windborne Strike", { chains: [HA], endPosition: Position.Midair, castPriority: 2, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 10596, energy: 133, concerto: 266, offtune: 4264 }] });
 /** Abyssal Slash, releasing Basic during the Heavy Attack. */
-const HA3 = jiyanAction("Heavy - Abyssal Slash", { node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 8171, energy: 102, concerto: 205, offtune: 3288 }] });
+const HA3 = jiyanAction("Heavy - Abyssal Slash", { chains: [HA], castPriority: 2, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 8171, energy: 102, concerto: 205, offtune: 3288 }] });
 
-const MA = jiyanAction("Mid-air - Lone Lance Plunge", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 12326, energy: 51, concerto: 100, offtune: 4960 }] });
-const MA2 = jiyanAction("Mid-air - Lone Lance Plunge (Follow-Up)", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 15566, energy: 195, concerto: 391, offtune: 6264 }] });
+const MA = jiyanAction("Mid-air - Lone Lance Plunge", { castPosition: Position.Midair, endPosition: Position.Grounded, castPriority: 6, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 12326, energy: 51, concerto: 100, offtune: 4960 }] });
+const MA2 = jiyanAction("Mid-air - Lone Lance Plunge (Follow-Up)", { chains: [MA], castPriority: 6, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 15566, energy: 195, concerto: 391, offtune: 6264 }] });
 /** Banner of Triumph, the mid-air attack after Windborne Strike or a mid-air Windqueller. */
-const MA3 = jiyanAction("Basic - Banner of Triumph", { node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 7952, energy: 100, concerto: 200, offtune: 3200 }] });
+const MA3 = jiyanAction("Basic - Banner of Triumph", { chains: () => [HA2, Skill], castPosition: Position.Midair, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 7952, energy: 100, concerto: 200, offtune: 3200 }] });
 // PLACEHOLDER FRAMES
-const DC = jiyanAction("Dodge Counter - Lone Lance", { node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [
+const DC = jiyanAction("Dodge Counter - Lone Lance", { chains: [DODGE], castPriority: 8, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [
     { hitFrame: 0, mv: 12584, energy: 158, concerto: 166, offtune: 2664 },
     { hitFrame: 0, mv: 12584, energy: 158, concerto: 166, offtune: 2664 },
   ], castConcerto: 1000});
 
-/** Qingloong Mode itself, opened by Prelude and over when he leaves — what Windqueller reads to
- *  know its +20% is free. Nameless: the mode is the lances on screen, not a line of its own. */
+/** Qingloong Mode itself, opened by Prelude for 10s — what Windqueller reads to know its +20% is
+ *  free, and what every Lance of Qingloong requires. Hidden: the mode is the lances on screen. */
 const QINGLOONG_MODE = new Buff({ duration: 60 * 10 });
 /** Held through a Windqueller that bought its +20% with Resolve. */
-const WINDQUELLER_BOUGHT = new Buff({ hidden: true });
+const WINDQUELLER_BOUGHT = new Buff({});
 
 /** Windqueller, one action for its three faces. Qingloong at War (Forte Circuit): +20% DMG free
  *  inside the mode; outside it, bought with 30 Resolve when he holds that many (15 at S1, which
@@ -125,7 +131,7 @@ const WINDQUELLER_BOUGHT = new Buff({ hidden: true });
 const SKILL_CD = new Cooldown({ frames: 60 * 7, charges: () => (isHeld(JY_S1) ? 2 : 1) });
 // PLACEHOLDER FRAMES
 const Skill = jiyanAction("Skill - Windqueller", {
-  animFrames: 43, cooldown: SKILL_CD,
+  animFrames: 43, castPriority: 4, cooldown: SKILL_CD,
   node: Node.Skill, cast: Cast.Skill, type: Type.Skill, bullets: [
     { hitFrame: 30, mv: 10636, energy: 225, offtune: 1620 },
     { hitFrame: 30, mv: 10636, energy: 225, offtune: 1620 },
@@ -136,7 +142,7 @@ const Skill = jiyanAction("Skill - Windqueller", {
     if (isHeld(QINGLOONG_MODE)) return;
     const cost = isHeld(JY_S1) ? 15 : 30;
     if (forte1() < cost) return;
-    addToCast({ forte1: -cost });
+    addGain({ forte1: -cost });
     applyCurrent(WINDQUELLER_BOUGHT, 1);
   },
   applyStats: () => { if (isHeld(QINGLOONG_MODE) || isHeld(WINDQUELLER_BOUGHT)) addStat(Stat.DmgBonus, 20); },
@@ -146,9 +152,9 @@ const Skill = jiyanAction("Skill - Windqueller", {
 /** Emerald Storm - Prelude: no damage of its own, just opens Qingloong Mode. */
 // Prelude releases Finale itself whenever the 30 Resolve it spends is banked
 const Liberation = jiyanAction("Liberation - Emerald Storm: Prelude", {
-  animFrames: 60, timestop: 60, motionStop: 60, prioFrames: 60,
+  animFrames: 60, timestop: [0, 60], motionStop: [0, 60], castPriority: 10,
   cooldown: 60 * 16,
-  node: Node.Liberation, cast: Cast.Liberation, concerto: 2000, resetEnergy: true,
+  node: Node.Liberation, cast: Cast.Liberation, castConcerto: 2000, castEnergy: -12500,
   updateBuffs: () => {
     applyCurrent(QINGLOONG_MODE, 1);
     if (forte1() >= 30) queue(Finale);
@@ -156,7 +162,7 @@ const Liberation = jiyanAction("Liberation - Emerald Storm: Prelude", {
 });
 /** Emerald Storm - Finale, released by Prelude at 30+ Resolve — considered Heavy Attack DMG. */
 // PLACEHOLDER FRAMES
-const Finale = jiyanAction("Liberation - Emerald Storm: Finale", { animFrames: 60, timestop: 60, motionStop: 60, prioFrames: 60, node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [
+const Finale = jiyanAction("Liberation - Emerald Storm: Finale", { minForte1: 30, animFrames: 60, timestop: [0, 60], motionStop: [0, 60], castPriority: 10, node: Node.Liberation, cast: Cast.Liberation, type: Type.Heavy, bullets: [
     { hitFrame: 60, mv: 14291, offtune: 21504 },
     { hitFrame: 60, mv: 14291, offtune: 21504 },
     { hitFrame: 60, mv: 42873, offtune: 64512 },
@@ -164,7 +170,7 @@ const Finale = jiyanAction("Liberation - Emerald Storm: Finale", { animFrames: 6
 
 // Lance of Qingloong, the mode's own three-stage Heavy Attack — 8 hits a stage
 // PLACEHOLDER FRAMES
-const Lance1 = jiyanAction("Heavy - Lance of Qingloong 1", { animFrames: 90, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const Lance1 = jiyanAction("Heavy - Lance of Qingloong 1", { requireBuff: QINGLOONG_MODE, animFrames: 90, castPriority: 2, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 58, mv: 6552, energy: 47, concerto: 95, offtune: 1534 },
     { hitFrame: 58, mv: 6552, energy: 47, concerto: 95, offtune: 1534 },
     { hitFrame: 58, mv: 6552, energy: 47, concerto: 95, offtune: 1534 },
@@ -175,7 +181,7 @@ const Lance1 = jiyanAction("Heavy - Lance of Qingloong 1", { animFrames: 90, nod
     { hitFrame: 58, mv: 6552, energy: 47, concerto: 95, offtune: 1534 },
   ]});
 // PLACEHOLDER FRAMES
-const Lance2 = jiyanAction("Heavy - Lance of Qingloong 2", { animFrames: 87, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const Lance2 = jiyanAction("Heavy - Lance of Qingloong 2", { chains: [Lance1], requireBuff: QINGLOONG_MODE, animFrames: 87, castPriority: 2, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 87, mv: 6155, energy: 45, concerto: 90, offtune: 1441 },
     { hitFrame: 87, mv: 6155, energy: 45, concerto: 90, offtune: 1441 },
     { hitFrame: 87, mv: 6155, energy: 45, concerto: 90, offtune: 1441 },
@@ -186,7 +192,7 @@ const Lance2 = jiyanAction("Heavy - Lance of Qingloong 2", { animFrames: 87, nod
     { hitFrame: 87, mv: 6155, energy: 45, concerto: 90, offtune: 1441 },
   ]});
 // PLACEHOLDER FRAMES
-const Lance3 = jiyanAction("Heavy - Lance of Qingloong 3", { animFrames: 96, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
+const Lance3 = jiyanAction("Heavy - Lance of Qingloong 3", { chains: [Lance2], requireBuff: QINGLOONG_MODE, animFrames: 96, castPriority: 2, node: Node.Liberation, cast: Cast.Heavy, type: Type.Heavy, bullets: [
     { hitFrame: 96, mv: 6676, energy: 48, concerto: 97, offtune: 1563 },
     { hitFrame: 96, mv: 6676, energy: 48, concerto: 97, offtune: 1563 },
     { hitFrame: 96, mv: 6676, energy: 48, concerto: 97, offtune: 1563 },
@@ -197,12 +203,12 @@ const Lance3 = jiyanAction("Heavy - Lance of Qingloong 3", { animFrames: 96, nod
     { hitFrame: 96, mv: 6676, energy: 48, concerto: 97, offtune: 1563 },
   ]});
 
-const Intro = jiyanAction("Intro - Tactical Strike", { animFrames: 129, bullets: [{ hitFrame: 50, mv: 19881, energy: 1000, offtune: 7416, forte1: 30 }], node: Node.Intro, cast: Cast.Intro, type: Type.Intro, castConcerto: 1000});
+const Intro = jiyanAction("Intro - Tactical Strike", { endPosition: Position.Grounded, animFrames: 129, castPriority: 11, bullets: [{ hitFrame: 50, mv: 19881, energy: 1000, offtune: 7416, forte1: 30 }], node: Node.Intro, cast: Cast.Intro, type: Type.Intro, castConcerto: 1000});
 /** Discipline: no damage of its own, just the handoff — its lances are ACTION_OUTRO_COORD. */
 const Outro = jiyanAction("Outro - Discipline", {
   cast: Cast.Outro, minConcerto: 10000, castConcerto: -10000,
   // queued twice so the adopter picks the buff up at both charges
-  updateBuffs: () => { queueOutro(JIYAN_OUTRO); queueOutro(JIYAN_OUTRO); },
+  updateBuffs: () => { queueQTE(JIYAN_OUTRO); queueQTE(JIYAN_OUTRO); },
 });
 /** One coordinated lance strike — queued onto his own slot by JIYAN_OUTRO below, once per stack
  *  the incoming resonator's Heavy casts consume. */
@@ -250,10 +256,11 @@ const JIYAN_OUTRO: Buff = new Buff({
 // stat-tree bonus alone, its own piece of gear so it's independently identifiable from his kit
 const JIYAN_TALENTS = new Talent({
   name: "Jiyan: Talents",
-  stats: [[Stat.CritRate, 8], [Stat.BonusAtk, 12]],
+  stats: [[Stat.CritRate, 8], [Stat.BonusAtk, 11.9999997]],
 });
 
 const JIYAN_RESONATOR = new Resonator({
+  id: 1404,
   name: "Jiyan",
   matrix: matrix("Jiyan", 25),
   talent: JIYAN_TALENTS,
@@ -263,6 +270,9 @@ const JIYAN_RESONATOR = new Resonator({
   weapon: WeaponType.Broadblade,
   color: "#4fc98f",
   intro: Intro,
+  // Qingloong Mode replaces his Basic Attack with Lance of Qingloong
+  swapIn: () => (isHeld(QINGLOONG_MODE) ? Lance1 : BA1),
+  swapInAir: MA,
   maxEnergy: 12500,
   maxForte1: 60,
 
@@ -288,7 +298,7 @@ const VERSATILITY = new Buff({
 });
 const JY_S2 = new Sequence({
   name: "Jiyan S2: Versatility",
-  updateBuffs: () => { if (runningAction(Intro)) addToCast({ forte1: 30 }); },
+  updateBuffs: () => { if (runningAction(Intro)) addGain({ forte1: 30 }); },
   grants: [{ on: onAction(Intro), buff: VERSATILITY }],
 });
 
@@ -351,33 +361,33 @@ const JY_S6 = new Sequence({
 const JY_SEQUENCES = [JY_S1, JY_S2, JY_S3, JY_S4, JY_S5, JY_S6];
 
 const JY_ROTATION = new Rotation([
-  START_LAST, Skill.instaSwap(),
+  START_LAST, BA1.instaCancel(), Skill.instaSwap(),
 
-  INTRO, 
+  Intro, 
   Liberation,
-  Lance1.cancel(), Skill, ECHO,
+  Lance1.cancel(), Skill,
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
-  Skill.instaSwap(), Outro,
+   ACTION_NM_FEILIAN_BERINGAL, Skill.instaSwap(), Outro,
 ]);
 
 const JY_ROTATION_S6 = new Rotation([
-  START_LAST, Skill.instaSwap(),
+  START_LAST, BA1.instaCancel(), Skill.instaSwap(),
 
-  INTRO, 
+  Intro, 
   Liberation,
-  Lance1.cancel(), Skill, ECHO,
+  Lance1.cancel(), Skill, 
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
   Lance1.dodgeCancel(),
-  Skill.instaSwap(), Outro,
+  ACTION_NM_FEILIAN_BERINGAL, Skill.instaSwap(), Outro,
 ]);
 
 /* ----------------------------------------------------------------------------------- loadout */
@@ -385,13 +395,17 @@ const JY_ROTATION_S6 = new Rotation([
 // his real 43311 build: resonator + talents + both Inherent Skills, weapon, mainslot echo,
 // sonata pieces, mainstat/substat
 export const JIYAN = new Loadout({
+  id: 14041,
   resonator: JIYAN_RESONATOR,
-  weapons: [VERDANT_SUMMIT, NEW_STD_BRAUDBLADE, LUSTROUS_RAZOR],
-  echoLoadouts: [new EchoLoadout(NM_FEILIAN_BERINGAL, SIERRA_GALE_5PC),
-      new EchoLoadout(NM_KELPIE, WINDWARD_5PC),],
-  mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Aero3, Mainstat.ATK1),
-  substat: substats(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
-  highSubstat: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
+  weapons: [VERDANT_SUMMIT, NEW_STD_BRAUDBLADE, LUSTROUS_RAZOR, AUTUMNTRACE, AUREATE_ZENITH],
+  echoes: new Echoes({
+    sets: [new EchoLoadout(NM_FEILIAN_BERINGAL, SIERRA_GALE_5PC),
+      // Windward's 5pc needs Aero Erosion on the target, which only these three inflict
+      new EchoLoadout(NM_KELPIE, WINDWARD_5PC).requires(CARTETHYIA_RESONATOR, CIACCONA_RESONATOR, ROVER_AERO_RESONATOR),],
+    mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Aero3, Mainstat.ATK1),
+    substats: substats(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill),
+    highSubstats: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Heavy, Substat.FlatAtk, Substat.Skill, Substat.Basic),
+  }),
   rotation: { 0: JY_ROTATION, 6: JY_ROTATION_S6 },
   sequences: JY_SEQUENCES,
 });

@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALL_TEAMS, teamKey } from "../dist/src/teams.js";
+import { ALL_TEAMS, teamKey } from "../dist/src/resonators/teams.js";
+import { ENCORE } from "../dist/src/resonators/fusion/encore.js";
 import { ROVER_HAVOC } from "../dist/src/resonators/havoc/rover_havoc.js";
 import { DEFAULT_TEAM_COST, MAKAN_COST_OVERRIDES, makanCost } from "../dist/src/costs.js";
 import {
   TEAM_COSTS, defaultFilters, member, hasBuild, eligibleWeapons, sequenceLevels,
   solveTeam, comboOf, weaponBase, isSignature, bestKey, picksKey, filterSignature,
-} from "../dist/src/solver.js";
+} from "../dist/src/solve/solver.js";
 import { applyHash, syncHash, filters, solveFits, storeSolved, picksCache, bestPicks } from "../dist/src/page/model.js";
 
-const loadouts = [...new Set([...ALL_TEAMS.flatMap((t) => t.loadouts), ROVER_HAVOC])];
+const loadouts = [...new Set([...ALL_TEAMS.flatMap((t) => t.loadouts), ROVER_HAVOC, ENCORE])];
 const membersNamed = (name) => loadouts.filter((l) => l.resonator.name === name).map((l) => member(l));
 
 test("the custom default resolves every named override in all its loadout variants", () => {
@@ -94,16 +95,17 @@ test("S6 Buling makes the Brant/Carlotta team energy-feasible", () => {
   assert.equal(solveFits(bestKey(teamKey(index), ms, f), solved, f), true);
 });
 
-test("an energy-infeasible S0 Buling preset is cached as unavailable without invalid picks", () => {
+test("an unfulfillable energy requirement is cached as unavailable without invalid picks", () => {
   const index = ALL_TEAMS.findIndex((t) => t.loadouts.map((l) => l.resonator.name).join(",") === "Buling,Brant,Carlotta");
   assert.ok(index >= 0);
   const team = ALL_TEAMS[index];
   const ms = team.loadouts.map((l, i) => member(l, team.mdps[i]));
   const key = teamKey(index);
   const f = defaultFilters();
-  const previous = MAKAN_COST_OVERRIDES.Buling;
+  const loadout = ms.find((m) => m.name === "Carlotta").loadout;
+  const previous = loadout.minEr;
   try {
-    MAKAN_COST_OVERRIDES.Buling = { sequence: 0, signature: false, refinement: 1 };
+    loadout.minEr = 1000;
     const solved = solveTeam(key, ms, f);
     assert.match(solved.unavailable, /Carlotta.*cannot fill their Energy bar/);
     assert.deepEqual(solved.rows, []);
@@ -114,8 +116,7 @@ test("an energy-infeasible S0 Buling preset is cached as unavailable without inv
     storeSolved(key, solved, f);
     assert.equal(picksCache.has(picksKey(key, ms, f)), false);
   } finally {
-    if (previous) MAKAN_COST_OVERRIDES.Buling = previous;
-    else delete MAKAN_COST_OVERRIDES.Buling;
+    loadout.minEr = previous;
     bestPicks.delete(bestKey(key, ms, f));
   }
 });

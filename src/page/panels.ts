@@ -2,26 +2,29 @@
  * Hover panels: the markup every popover is built from (stat traces, action info, held buffs,
  * damage breakdowns, loadouts, the DPR table) and `wireSourcePanels`, which opens them.
  */
-import { Stat, Attribute, Type, Subtype, scopedStat, splitStat, isPercent, statLabel, TAG_NAME, NODE_NAME, statDisplayScale } from "../engine/stats.js";
+import { Stat, Attribute, Type, Subtype, Cast, scopedStat, splitStat, isPercent, statLabel, TAG_NAME, NODE_NAME, statDisplayScale, splitStop } from "../engine/stats.js";
 import type { StatKey, Tag } from "../engine/stats.js";
 import type { StatEntry } from "../engine/state.js";
 import { Sonata } from "../engine/gear.js";
 import type { Buff, Gear } from "../engine/gear.js";
-import { menuStats } from "../engine/context.js";
+import { menuStats, panelStats } from "../engine/context.js";
 import { substatRollBuffs, litStats } from "../shared/substats.js";
-import { erRollsFor } from "../teamrun.js";
+import { erRollsFor } from "../solve/teamrun.js";
 import { mainstatSlotBuffs } from "../shared/mainstats.js";
 import { TUNE_BREAK_ENEMY } from "../shared/tunebreak.js";
+import { Echo } from "../shared/echoes.js";
 import type { HeldBuff } from "../engine/state.js";
 import type { ChainGroup, ResolvedSnapshot } from "../engine/evaluate.js";
-import { fmt, fmtExact } from "../display.js";
-import type { Column, TraceEntry, InfoEntry } from "../display.js";
-import type { Member, Combo } from "../solver.js";
-import { hitsOf } from "../teamrun.js";
-import type { TeamRun } from "../teamrun.js";
+import { fmt, fmtExact, fmtPct } from "./display.js";
+import type { Column, TraceEntry, InfoEntry, RowHit } from "./display.js";
+import type { Member, Combo } from "../solve/solver.js";
+import { loadoutName } from "../solve/solver.js";
+import { hitsOf } from "../solve/teamrun.js";
+import type { TeamRun } from "../solve/teamrun.js";
 import { results, FALLBACK_HUE } from "./model.js";
 import { ActionTag } from "../engine/rotation.js";
 import { portrait, loadPortraits } from "./portraits.js";
+import type { Action } from "../engine/rotation.js";
 
 export const esc = (s: unknown): string => String(s)
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -60,12 +63,35 @@ export const rect = (el: Element): DOMRect => {
   return z === 1 ? r : new DOMRect(r.x / z, r.y / z, r.width / z, r.height / z);
 };
 
+/** Where a copied block is headed: Discord's plain text, or a spreadsheet's cells. */
+export type CopyMode = "discord" | "sheets";
+
+/** Copy a block of cells, with an HTML table for spreadsheets and rich editors, which split it into
+ *  cells. Its plain text is, for Discord, padded to each column's longest in a ``` block, which lines
+ *  up in a fixed-width font; for Sheets, tab-separated, which a paste splits into cells too. */
+export function copyBlock(rows: string[][], mode: CopyMode = "discord"): void {
+  const wide = rows[0]?.map((_, c) => Math.max(...rows.map((r) => r[c]!.length))) ?? [];
+  const text = rows.map((r) => r.map((t, c) => t.padEnd(wide[c]!)).join("  ").trimEnd()).join("\n");
+  const plain = mode === "sheets" ? rows.map((r) => r.join("\t")).join("\n") : "```\n" + text + "\n```";
+  const html = `<table>${rows.map((r) => `<tr>${r.map((t) => `<td>${esc(t)}</td>`).join("")}</tr>`).join("")}</table>`;
+  const clip = navigator.clipboard;
+  if (!clip) return;
+  const write = typeof ClipboardItem === "undefined"
+    ? clip.writeText(plain)
+    : clip.write([new ClipboardItem({
+      "text/plain": new Blob([plain], { type: "text/plain" }),
+      "text/html": new Blob([html], { type: "text/html" }),
+    })]);
+  write.catch(() => clip.writeText(plain).catch(() => { /* nowhere to put it */ }));
+}
+
 /** Open panels are parked in <body> and outlive the page they belong to. */
 export const clearPops = (): void => { document.body.querySelectorAll(":scope > .pop").forEach((el) => el.remove()); };
 
 const unit = (r: TraceEntry): string => ((r.percent ?? (r.stat !== undefined ? isPercent(r.stat) : false)) ? "%" : "");
 
-const SECTION_ORDER = ["base", "bonus", "flat", "final"];
+// energy's cast section ahead of its hits' and their multiplier (display.ts)
+const SECTION_ORDER = ["base", "bonus", "flat", "final", "cast", "energy"];
 const SECTION_RANK = (key: string | null): number => {
   if (key === null) return -1;
   const word = key.split(" ")[0]!.toLowerCase();
@@ -79,7 +105,8 @@ export const panelRow = (r: TraceEntry, slotHue: Map<string, string>, { noSource
   const source = (r.count ?? 1) > 1 ? `${r.source} x${r.count}` : r.source;
   // the panel is the exact figure unless the row asks for a length — a derived ratio does, since
   // its decimals run as long as the division does
-  const show = (v: number): string => (r.digits === undefined ? fmtExact(v) : fmt(v, r.digits, true));
+  // a percent reads to two decimals, rounded
+  const show = (v: number): string => (unit(r) ? fmtPct(v) : r.digits === undefined ? fmtExact(v) : fmt(v, r.digits, true));
   const value = `<td class="v">${r.text !== undefined ? esc(r.text)
     : r.mult ? `&times;${show(r.value)}` : `${show(r.value)}${unit(r)}`}</td>`;
   if (r.summary) return `<tr class="sum${r.joined ? " joined" : ""}"><td class="k">${esc(label)}</td>${value}</tr>`;
@@ -120,9 +147,26 @@ export function popover(col: Column, rows: TraceEntry[] | undefined, total: numb
     : `<tr class="sec${empty ? " plain" : ""}"><td colspan="2">`
       + `${esc(empty || (col.fullEmpty ?? col.full ?? col.label))}</td></tr>`;
   const sum = col.noTotal ? "" : `<tr class="sum"><td class="k">Total</td>`
-    + `<td class="v">${fmtExact(total)}${col.percent ? "%" : ""}${esc(suffix)}</td></tr>`;
+    + `<td class="v">${col.percent ? `${fmtPct(total)}%` : fmtExact(total)}${esc(suffix)}</td></tr>`;
+  // what follows the Total opens a heading wherever its section changes (energy's Energy Regen)
+  const tail = after.map((r, i) => (r.section && r.section !== after[i - 1]?.section
+    ? `<tr class="sec"><td colspan="2">${esc(r.section)}</td></tr>` : "") + row(r)).join("");
   return lazyPop(`<span class="pop stat${col.key === "avg" ? " damage" : ""}"><table>${titled}`
-    + `${before.map(row).join("")}${sum}${after.map(row).join("")}</table></span>`);
+    + `${before.map(row).join("")}${sum}${tail}</table></span>`);
+}
+
+/** The avg cell's hover: every damaging hit the row landed — on average, on a crit, on none — each
+ *  numbered within its own press (a group's start again at 1), then their totals under a rule. */
+export function hitsPopover(hits: RowHit[]): string {
+  if (!hits.length) return "";
+  const row = (label: string, v: number[], cls = ""): string =>
+    `<tr${cls}><td class="k">${esc(label)}</td>${v.map((x) => `<td class="v">${fmt(x, 0)}</td>`).join("")}</tr>`;
+  const total = hits.reduce((t, h) => [t[0]! + h.avg, t[1]! + h.crit, t[2]! + h.noCrit], [0, 0, 0]);
+  return lazyPop(`<span class="pop stat hits"><table>`
+    + `<tr class="sec"><td>Hits</td><td>Avg</td><td>Crit</td><td>Base</td></tr>`
+    + hits.map((h) => row(`Hit ${h.n}`, [h.avg, h.crit, h.noCrit])).join("")
+    + row("Total", total, ' class="sum"')
+    + `</table></span>`);
 }
 
 export function infoPopover(info: InfoEntry[] | undefined, slotHue: Map<string, string>): string {
@@ -150,11 +194,11 @@ export function framesPopover(snaps: ResolvedSnapshot[]): string {
     // a split press's row shows its cast, which played none of the hit's frames; a hold cancel's
     // frames are where it let go
     const press = s.hitAt !== undefined ? s.action.castPart() : s.action;
-    const hold = s.tag === ActionTag.HoldCancel && s.holdPaid >= 0;
-    const cost = hold ? press.holdCost(s.action.letGo(s.holdPaid)) : press.cost(s.tag);
+    const fast = s.tag === ActionTag.MashCancel;
+    const hold = (s.tag === ActionTag.HoldCancel || fast) && s.holdPaid >= 0;
+    const cost = hold ? press.holdCost(s.holdCut) : press.cost(s.tag);
     total += cost.total - s.timestopBanked;
     const insta = s.tag === ActionTag.InstaCancel || s.tag === ActionTag.InstaDodge || s.tag === ActionTag.InstaJump || s.tag === ActionTag.InstaSwap;
-    const fast = s.tag === ActionTag.MashCancel;
     // every press is listed at the frames it played but an insta cut, which lists only what it cost;
     // "(c)" where it played to its cancel frame rather than its whole length
     const cut = s.tag === ActionTag.Cancel
@@ -163,26 +207,28 @@ export function framesPopover(snaps: ResolvedSnapshot[]): string {
     || s.tag === ActionTag.DodgeCancel
     || s.tag === ActionTag.JumpCancel
     || s.tag === ActionTag.SwapCancel
+    || s.tag === ActionTag.MashSwap
     || s.tag === ActionTag.HitCancel
     || s.tag === ActionTag.DodgeOnHit
     || s.tag === ActionTag.JumpOnHit
-    // a hold cancel plays to the hit that paid for the next press, or through its own priority if
-    // that is later, then holds out what is left of its minimum
+    // a hold cancel plays to the hit that paid for the next press, or until its priority gave way to
+    // that press if later (`holdPaid` reads both), then holds out what is left of its minimum
     if (hold) {
-      const own = Math.min(Math.max(s.holdPaid, s.action.prioFrames), cost.action);
+      const own = Math.min(s.holdPaid, cost.action);
       if (own) rows.push(line(`${s.action.name} (c)`, own));
-      if (cost.action > own) rows.push(line("Hold Input", cost.action - own));
+      if (cost.action > own) rows.push(line(fast ? "Mash Input" : "Hold Input", cost.action - own));
     } else if (!insta) rows.push(line(`${s.action.name}${cut ? " (c)" : ""}`, cost.action));
     // the world stood still for part of it: the clock takes it back off
     if (cost.timestop) rows.push(line("Timestop", -cost.timestop));
     // the cut it paid, right under it
-    if (cost.global) rows.push(line(insta ? "Input Delay" : (fast ? "Mash delay" : "Cancel Timing"), cost.global));
+    const swaps = s.tag === ActionTag.InstaSwap || s.tag === ActionTag.SwapCancel || s.tag === ActionTag.MashSwap;
+    if (cost.global) rows.push(line(swaps ? "Swap Delay" : insta ? "Input Delay" : "Cancel Timing", cost.global));
     // ...all of it played inside an earlier press's time stop, as far as that still stood
     if (s.timestopBanked) rows.push(line("Banked Timestop", -s.timestopBanked));
     // the next resonator coming in, charged to the row that handed the field over
     if (s.swapFrames) rows.push(line("Swap Delay", s.swapFrames));
     total += s.swapFrames ?? 0;
-    banks += Math.max(0, s.action.timestop - cost.timestop);
+    banks += splitStop(press.timestopFrom, press.timestop, cost.action, cost.action + cost.global).banked;
   }
   return lazyPop(`<span class="pop frames"><table><tr class="sec"><td colspan="2">Active Frames</td></tr>`
     + rows.join("")
@@ -242,7 +288,8 @@ function eachHit(lines: ChainGroup[], slot: string | null, fn: (snap: ResolvedSn
 /* ---------------------------------------------------------------------------------- loadout */
 
 /** A member's equipped gear for one combo, labelled by slot — inherents, weapon, mainslot, sets,
- *  mainstat, substats. Matrix is left out: it is a filter on the resonator, not a build pick. */
+ *  the five echoes wearing the main stats and substats. Matrix is left out: it is a filter on the
+ *  resonator, not a build pick. */
 export function equippedGear(member: Member, combo: Combo, erRolls = 1): [string, Gear][] {
   const l = member.loadout;
   const r = l.resonator;
@@ -250,7 +297,7 @@ export function equippedGear(member: Member, combo: Combo, erRolls = 1): [string
     ...(r.inherent2 ? [["Inherent", r.inherent2] as [string, Gear]] : []),
     ["Weapon", combo.weapon], ["Mainslot", combo.echo.mainslot],
     ...combo.echo.sets.map((g, i): [string, Gear] => [i === 0 ? "Sonata" : "", g]),
-    ["Mainstats", combo.mainstat], ["Substats", l.spread(combo.highSubs, erRolls)]];
+    ...l.echoes.worn(combo.echo, combo.mainstat, l.spread(combo.highSubs, erRolls)).map((g): [string, Gear] => ["Echo", g])];
 }
 
 /** Dmg Bonus scope buckets for the menu stats — each keeps only its biggest line. */
@@ -269,16 +316,17 @@ const OTHER_SCOPES = [
 /** The build's constant stats as the game's character screen shows them (`menuStats()`), zeros dropped. */
 function menuStatRows(member: Member, combo: Combo, erRolls: number): { label: string; value: string }[] {
   const l = member.loadout;
-  const entries = menuStats(l.pieces(combo.weapon, combo.echo, combo.mainstat, combo.sequence, combo.matrix !== null, combo.highSubs, erRolls));
+  const pieces = l.pieces(combo.weapon, combo.echo, combo.mainstat, combo.sequence, combo.matrix !== null, combo.highSubs, erRolls);
+  const entries = menuStats(pieces);
   const totals = new Map<number, number>();
   for (const e of entries) totals.set(e.stat, (totals.get(e.stat) ?? 0) + e.value);
   const get = (key: number) => totals.get(key) ?? 0;
-  const fold = (base: Stat, bonus: Stat, flat: Stat) => get(base) * (1 + get(bonus) / 100) + get(flat);
+  const folded = panelStats(pieces);
 
   const rows: { label: string; value: string }[] = [];
   const push = (label: string, value: number, percent: boolean) => {
     if (!value) return;
-    rows.push({ label, value: `${fmt(value, percent ? 1 : 0, percent)}${percent ? "%" : ""}` });
+    rows.push({ label, value: percent ? `${fmtPct(value)}%` : fmt(value) });
   };
   const pushBest = (scopes: (Attribute | Type | Subtype)[]) => {
     let bestTag: Attribute | Type | Subtype | null = null, bestValue = 0;
@@ -289,14 +337,14 @@ function menuStatRows(member: Member, combo: Combo, erRolls: number): { label: s
     if (bestTag !== null) push(statLabel(scopedStat(bestTag, Stat.DmgBonus)), bestValue, true);
   };
 
-  push("HP", fold(Stat.BaseHp, Stat.BonusHp, Stat.FlatHp), false);
-  push("ATK", fold(Stat.BaseAtk, Stat.BonusAtk, Stat.FlatAtk), false);
-  push("DEF", fold(Stat.BaseDef, Stat.BonusDef, Stat.FlatDef), false);
-  push(statLabel(Stat.Er), get(Stat.Er), true);
+  push("HP", folded.hp, false);
+  push("ATK", folded.atk, false);
+  push("DEF", folded.def, false);
+  push(statLabel(Stat.ER), get(Stat.ER), true);
   push(statLabel(Stat.CritRate), get(Stat.CritRate), true);
   push(statLabel(Stat.CritDmg), get(Stat.CritDmg), true);
   // Tune Break Boost is a count of points, not a percentage
-  push(statLabel(Stat.Tbb), get(Stat.Tbb), false);
+  push(statLabel(Stat.TBB), get(Stat.TBB), false);
   pushBest(ATTRIBUTE_SCOPES);
   pushBest(CORE_TYPE_SCOPES);
   pushBest(OTHER_SCOPES);
@@ -346,8 +394,8 @@ function buffStats(run: TeamRun, keep: (root: Gear, e: StatEntry, slot: string) 
   const grantedBy = run.state?.grantedBy;
   if (!grantedBy || !run.rotationLines) return [];
   // a piece that pays out of its own applyStats() — Starfield Calibrator's Skill Concerto — is
-  // its own source, so it stands in for the root nothing granted it
-  const rootOf = (g: Gear): Gear => grantedBy.get(g) ?? g;
+  // its own source, so it stands in for the root nothing granted it; an echo's cast is its mainslot's
+  const rootOf = (g: Gear): Gear => grantedBy.get(g) ?? (g as Partial<Action>).mainslot ?? g;
   // per buff, per stat, the entry that gave the most — Map order is first-seen, so the rows come
   // out in the order the fight put the buffs up
   const peak = new Map<Gear, Map<StatKey, StatEntry>>();
@@ -370,7 +418,7 @@ function buffStats(run: TeamRun, keep: (root: Gear, e: StatEntry, slot: string) 
  *  must not print those same lines a second time — a resonator's own base stats, a weapon's flat
  *  ATK. Keyed on the value as well, so a piece that also adds to that stat mid-fight (a threshold,
  *  a Concerto on a cast) keeps the part the Stats section never showed. */
-const lineKey = (e: StatEntry): string => `${e.gear?.id} ${e.stat} ${e.value}`;
+const lineKey = (e: StatEntry): string => `${e.gear?.engineId} ${e.stat} ${e.value}`;
 const constantKeys = (stats: StatEntry[]): Set<string> => new Set(stats.map(lineKey));
 
 /** A panel line — a trace entry, plus `dim` for the ones a spread only rolled once. */
@@ -380,16 +428,13 @@ type PanelRow = StatEntry & { dim?: boolean };
  *  reading a concerto or energy source gets in the action log), then the stat and the value. */
 const statRow = (e: PanelRow, owner: string, slotHue: Map<string, string>, noStat = false): string => {
   const percent = isPercent(e.stat);
-  // energy and concerto are fed in fractions of a point — the same two decimals their own columns
-  // print in the action log, rather than a whole number that reads 31 for 30.51
   const stat = splitStat(e.stat)[0];
-  const resource = stat === Stat.AddEnergy || stat === Stat.AddConcerto;
   // the cell's own member, not the entry's `owner`: every panel here is one member's piece and is
   // filtered to what that member put up, while `owner` is `State.sourceOf` — one entry per Gear, so
   // a sonata two of them wear reads as whoever equipped it last
   return `<tr class="stat${e.dim ? " one" : ""}"><td class="s" style="--own:${slotHue.get(owner) ?? FALLBACK_HUE}">${esc(e.source)}</td>`
     + (noStat ? "" : `<td class="k">${esc(statLabel(e.stat))}</td>`)
-    + `<td class="v">${fmt(e.value / statDisplayScale(stat), percent ? 1 : resource ? 2 : 0)}${percent ? "%" : ""}</td></tr>`;
+    + `<td class="v">${percent ? `${fmtPct(e.value / statDisplayScale(stat))}%` : fmt(e.value / statDisplayScale(stat))}</td></tr>`;
 };
 
 /** A loadout cell's hover: what the pieces grant the character screen (`menuStats()`), and under
@@ -416,18 +461,20 @@ function piecePopover(run: TeamRun, pieces: Gear[], owner: string, slotHue: Map<
 }
 
 /** The resonator's own hover, under her name: her kit's flat stats, and the buffs the kit itself
- *  brings — the ones her talents and inherents put up, plus everything her own casts do, a cast
- *  belonging to no equipped piece. Anything rooted in a piece somebody equipped is that piece's,
- *  and reads on its own cell (or on its owner's column) rather than twice. */
-function resonatorPopover(run: TeamRun, kit: Set<Gear>, equipped: Set<Gear>, owner: string, slotHue: Map<string, string>): string {
-  const stats = menuStats([...kit]);
+ *  brings — the ones her talents, inherents, chain nodes and Resonance Mode put up, plus everything
+ *  her own casts do, a cast belonging to no equipped piece. Anything rooted in a piece somebody
+ *  equipped is that piece's, and reads on its own cell (or on its owner's column) rather than twice.
+ *  `kit` is in the order it reads in: the resonator's own pieces, then the mode, then S1 up. */
+function resonatorPopover(run: TeamRun, kit: Gear[], equipped: Set<Gear>, owner: string, slotHue: Map<string, string>): string {
+  const own = new Set(kit);
+  const stats = menuStats(kit);
   const constant = constantKeys(stats);
-  // a forte gain is the kit spending its own gauge, not a stat it holds — the log's gauge columns
-  // are where that is read
-  const forte = (e: StatEntry) => e.stat >= Stat.AddForte1 && e.stat <= Stat.AddForte5;
   const mine = (root: Gear, e: StatEntry) =>
-    e.owner === owner && (kit.has(root) || !equipped.has(root)) && !constant.has(lineKey(e)) && !forte(e);
-  return statsPanel(stats, buffStats(run, mine), owner, slotHue);
+    e.owner === owner && (own.has(root) || !equipped.has(root)) && !constant.has(lineKey(e));
+  // a cast's own buff roots in nothing on the list, and reads with the resonator's
+  const order = new Map(kit.map((g, i): [Gear, number] => [g, i]));
+  const rank = (e: StatEntry) => order.get((e.gear ? run.state?.grantedBy.get(e.gear) : undefined) ?? e.gear!) ?? 0;
+  return statsPanel(stats, buffStats(run, mine).sort((a, b) => rank(a) - rank(b)), owner, slotHue);
 }
 
 /** `noStat` drops the middle column, for a list whose sources already name their own stat (a
@@ -442,74 +489,79 @@ function statsPanel(stats: PanelRow[], buffs: PanelRow[], owner: string, slotHue
     + `</table></span>`);
 }
 
+/** A cell of the Equipment table a click swaps from where it stands (page/pickmenu.ts) — the
+ *  resonator's own heading picks the chain level. */
+export type PickKind = "sequences" | "weapons" | "mainslot" | "sonata" | "mainstats" | "substats";
+
 /**
  * Loadouts: a column per member, the pieces a build is made of down the side. Each gear cell
- * hovers what that piece grants and Substats its roll spread; the Resonance Mode row carries
- * neither. The menu stats are a footer row that opens one member's whole list at a time — a
- * dozen rows of their own crowded out the pieces, and three builds rarely show the same ones.
+ * hovers what that piece grants and Substats its roll spread; the chain level and Resonance Mode
+ * ride on the name, whose hover carries theirs. The menu stats are a footer row that opens one
+ * member's whole list at a time — a dozen rows of their own crowded out the pieces, and three
+ * builds rarely show the same ones. `pickable` says which cells open a menu of other picks.
  */
-export function loadoutTable(run: TeamRun, needs?: Map<string, Map<string, string>>): string {
+export function loadoutTable(run: TeamRun, needs?: Map<string, Map<string, string>>, pickable?: (slot: number, kind: PickKind) => boolean): string {
   const erRolls = erRollsFor(run.teamKey, run.members, run.combo);
-  const builds = run.members.map((m, i) => ({ member: m, combo: run.combo[i]!, erRolls: erRolls[i]! }));
+  const builds = run.members.map((m, i) => ({ member: m, combo: run.combo[i]!, erRolls: erRolls[i]!, slot: i }));
   const slotHue = new Map([...run.members.map((m): [string, string] => [m.name, m.color]),
     [TUNE_BREAK_ENEMY.name, TUNE_BREAK_ENEMY.color]]);
-  const kitOf = ({ member, combo }: typeof builds[number]): Set<Gear> => {
-    const r = member.loadout.resonator;
-    return new Set([r, r.talent, r.inherent1, r.inherent2, combo.matrix].filter((g): g is Gear => g != null));
+  const kitOf = ({ member, combo }: typeof builds[number]): Gear[] => {
+    const l = member.loadout, r = l.resonator;
+    return [r, r.talent, r.inherent1, r.inherent2, combo.matrix, l.mode, ...l.sequences.slice(0, combo.sequence)]
+      .filter((g): g is Gear => g != null);
   };
+  const pick = (slot: number, kind: PickKind): string =>
+    (pickable?.(slot, kind) ? ` data-pick="${kind}" data-slot="${slot}"` : "");
   // everything anybody on the team holds — what tells a kit's own buff (put up by a cast, which
   // nobody equips) apart from a piece's
   const equipped = new Set(builds.flatMap(({ member, combo, erRolls: n }) =>
-    member.loadout.pieces(combo.weapon, combo.echo, combo.mainstat, combo.sequence, combo.matrix !== null, combo.highSubs, n)));
+    member.loadout.pieces(combo.weapon, combo.echo, combo.mainstat, combo.sequence, combo.matrix !== null, combo.highSubs, n)
+      .flatMap((g) => (g instanceof Echo ? [g, ...g.sources] : [g]))));
 
-  // the resonator herself, under her own name: her kit's own pieces, which are every piece she
-  // holds that isn't one of the build picks the rows below already list
+  // the resonator herself, under her own name, with any chain level and mode: her kit's own
+  // pieces, which are every piece she holds that isn't one of the build picks the rows below list
   const head = `<div class="rtrow rthead"><div class="c lbl">Resonator</div>`
     + builds.map((b) => {
       const hover = resonatorPopover(run, kitOf(b), equipped, b.member.name, slotHue);
-      return `<div class="c mem${hover ? " has" : ""}"${hover} style="--mem:${b.member.color}"><span class="character-label">${portrait(b.member.name)}${esc(b.member.name)}</span></div>`;
+      return `<div class="c mem${hover ? " has" : ""}"${hover}${pick(b.slot, "sequences")} style="--mem:${b.member.color}">`
+        + `<span class="character-label">${portrait(b.member.name)}${esc(loadoutName(b.member.loadout, b.combo.sequence))}</span></div>`;
     }).join("")
     + `</div>`;
   const row = (label: string, cells: string[]): string =>
     `<div class="rtrow"><div class="c lbl">${esc(label)}</div>${cells.join("")}</div>`;
-  const gearCell = (owner: string, g: Gear | null, pieces?: Gear[]): string => {
+  const gearCell = (owner: string, g: Gear | null, pieces?: Gear[], picks = ""): string => {
     if (!g) return `<div class="c"></div>`;
     const hover = piecePopover(run, pieces ?? [g], owner, slotHue);
-    return `<div class="c${hover ? " has" : ""}"${hover}>${esc(g.name)}</div>`;
+    return `<div class="c${hover ? " has" : ""}"${hover}${picks}>${esc(g.name)}</div>`;
   };
 
   const rows: string[] = [];
-  rows.push(row("Weapon", builds.map((b) => gearCell(b.member.name, b.combo.weapon))));
-  rows.push(row("Mainslot", builds.map((b) => gearCell(b.member.name, b.combo.echo.mainslot))));
-  // Every sonata set the build names, a row each. A 5pc's own 2pc half carries stats of its own
-  // (`EchoLoadout.pieces()` equips it separately), but it is never worn apart from the 5pc, so it
-  // reads inside that cell's own panel rather than taking a row nobody chose. As many rows as the
-  // widest member needs; a member with fewer leaves the extra ones blank.
-  const sonataOf = builds.map(({ combo }) => combo.echo.sets);
-  const sonatas = Math.max(...sonataOf.map((list) => list.length));
-  for (let i = 0; i < sonatas; i++) {
-    rows.push(row(i === 0 ? "Sonata" : "", builds.map((b, k) => {
-      const set = sonataOf[k]![i] ?? null;
-      return gearCell(b.member.name, set, set instanceof Sonata ? [set, set.sonata2pc] : undefined);
-    })));
-  }
+  rows.push(row("Weapon", builds.map((b) => gearCell(b.member.name, b.combo.weapon, undefined, pick(b.slot, "weapons")))));
+  rows.push(row("Mainslot", builds.map((b) => gearCell(b.member.name, b.combo.echo.mainslot, undefined, pick(b.slot, "mainslot")))));
+  // one row, named for the build's own set: the rest of it (a 3pc's 2pc beside it, a 5pc's own 2pc
+  // half) reads inside that cell's panel, the way a 5pc's always has
+  rows.push(row("Sonata", builds.map((b) => {
+    const sets = b.combo.echo.sets;
+    const pieces = sets.flatMap((g): Gear[] => (g instanceof Sonata ? [g, g.sonata2pc] : [g]));
+    return gearCell(b.member.name, sets[0] ?? null, pieces, pick(b.slot, "sonata"));
+  })));
   // Both spreads are their own list rather than a piece plus what it granted: five echoes' own
   // main and secondary stats, and the twenty-five rolls folded by stat. All Stats — nothing here
   // is granted mid-fight — and no collapsed totals above them, which only said the same sums twice.
-  const spreadCell = (piece: Buff, owner: string, stats: PanelRow[], heading: string, noStat = false): string => {
+  const spreadCell = (piece: { name: string }, owner: string, stats: PanelRow[], heading: string, noStat = false, picks = ""): string => {
     const hover = statsPanel(stats, [], owner, slotHue, heading, noStat);
-    return `<div class="c has"${hover}>${esc(piece.name)}</div>`;
+    return `<div class="c has"${hover}${picks}>${esc(piece.name)}</div>`;
   };
   rows.push(row("Mainstats", builds.map((b) =>
     spreadCell(b.combo.mainstat, b.member.name,
-      declaredRows(mainstatSlotBuffs(b.combo.mainstat), b.member.name, false), "Mainstats & Secondary Stats"))));
+      declaredRows(mainstatSlotBuffs(b.combo.mainstat), b.member.name, false), "Mainstats & Secondary Stats", false, pick(b.slot, "mainstats")))));
   rows.push(row("Substats", builds.map((b) => {
     const l = b.member.loadout;
     const piece = l.spread(b.combo.highSubs, b.erRolls);
     const rolls = substatRollBuffs(piece);
     const lit = litStats(l.resonator.maxEnergy);
     return spreadCell(piece, b.member.name, declaredRows(rolls, b.member.name, true, lit),
-      `Substats (${rolls.length} lines)`, true);
+      `Substats (${rolls.length} lines)`, true, pick(b.slot, "substats"));
   })));
   rows.push(row("Sequences", builds.map((b) => {
     if (!b.combo.sequence) return `<div class="c">S0</div>`;
@@ -518,9 +570,6 @@ export function loadoutTable(run: TeamRun, needs?: Map<string, Map<string, strin
     return `<div class="c${hover ? " has" : ""}"${hover}>${held.map((_, i) => `S${i + 1}`).join(", ")}</div>`;
   })));
 
-  if (builds.some((b) => b.member.loadout.mode)) {
-    rows.push(row("Mode", builds.map((b) => gearCell(b.member.name, b.member.loadout.mode ?? null))));
-  }
   // the menu stats are the row, not a hover off it: one member's whole list per cell
   rows.push(row("Menu Stats", builds.map((b) => {
     // Energy Regen and Crit Rate say in their own labels what is asked of them — detail.ts renders
@@ -614,7 +663,7 @@ export function dprTable(run: TeamRun, lines?: ChainGroup[][]): string {
 /** The one panel the page drives itself rather than leaving to the click: the action log's
  *  avg-cell sum, shown while a block of them is dragged over (detail.ts's `wireCellSelect`).
  *  Installed by `wireSourcePanels`, which owns the placing and the single open panel. */
-let driver: { show: (cell: Element, html: string) => void; hide: () => void; hold: (on: boolean) => void } | null = null;
+let driver: { show: (cell: Element, html: string) => void; hide: () => void; hold: (on: boolean) => void; pinnedOn: (cell: Element) => boolean } | null = null;
 
 /** Show `html` over `cell` in place of whatever that cell carries, until `dropPanel()` or the next
  *  click anywhere. Safe to call on every pointer move: it rebuilds and re-places, which is how the
@@ -624,6 +673,8 @@ export const dropPanel = (): void => driver?.hide();
 /** Shut the panels for as long as a press is down — nothing the pointer crosses mid-drag opens one
  *  (detail.ts's `wireCellSelect`), and a driven panel is still free to stand. */
 export const holdPanels = (on: boolean): void => driver?.hold(on);
+/** Does a clicked-open panel stand on `cell` (or a part of it) right now? */
+export const panelOpenOn = (cell: Element): boolean => driver?.pinnedOn(cell) ?? false;
 
 /**
  * Open a cell's panel on hover. A closed panel is detached and kept in `built` (only the open one
@@ -726,6 +777,7 @@ export function wireSourcePanels(root: HTMLElement): void {
       held = on;
       if (on) close();
     },
+    pinnedOn: (cell) => pinned && !!openHome && cell.contains(openHome),
   };
 
   /** Cells whose panel waits for a click and then stays put. The whole action log reads this way:
@@ -764,7 +816,12 @@ export function wireSourcePanels(root: HTMLElement): void {
       if (open?.contains(e.target as Node)) return;
       const onHome = !!openHome?.contains(e.target as Node);
       close();
-      if (onHome) return;
+      // the click that closes a panel on its own cell does only that: a cut's tag sits in a group's
+      // name, whose row would otherwise open or close under it
+      if (onHome) {
+        e.preventDefault();
+        return;
+      }
     }
     const { cell, pop } = panelIn(e.target);
     if (!cell) return;
@@ -794,13 +851,12 @@ interface Slice { label: string; value: number; color: string | null }
  *  `section` is the loop column it stands in, empty in the Total column, which covers all four. */
 type DistCell =
   | { kind: "slices"; slot: string; section: string; total: number; types: Slice[]; nodes: Slice[] }
-  | { kind: "team"; section: string; total: number; bars: Bar[]; roster: Caster[]; acts: BarAction[] };
-/** One hit of the rotation, in the order it was cast, and which of the figure's actions it is. */
-interface Bar { dmg: number; color: string; act: number }
+  | { kind: "team"; section: string; total: number; bars: Bar[]; acts: BarAction[] };
+/** One hit of the rotation, in the order it was cast, the real frames its press played, and which
+ *  of the figure's actions it is. */
+interface Bar { dmg: number; frames: number; color: string; act: number }
 /** One action's whole contribution to a figure, folded over every cast of it. */
 interface BarAction { name: string; color: string; dmg: number; casts: number }
-/** A name in the chart's own key, in the colour its bars are drawn in. */
-interface Caster { name: string; color: string }
 /** The label the team's own row wears, and the slot its distribution cells are keyed on — no
  *  resonator answers to it, so it can't collide with one. */
 const TEAM_ROW = "Team Total";
@@ -853,7 +909,7 @@ function distCell(lines: ChainGroup[], slot: string, section: string, hue: strin
     total += avg;
     // A status ladder carries Status on top of its own Subtype — the Subtype is the whole name anyone
     // reads it by, so Status drops out and the hit wears that status's own alone shade.
-    const subtype = snap.action.lastBullet?.subtype ?? null;
+    const subtype = snap.action.lastDamage?.subtype ?? null;
     const type = snap.type === Type.Status && subtype !== null ? null : snap.type;
     const key = (type ?? 0) | (subtype ?? 0);
     const slice = types.get(key);
@@ -1047,55 +1103,88 @@ function teamCell(sections: ChainGroup[][], section: string, slotHue: Map<string
   const by = new Map<string, number>();
   let total = 0;
   sections.forEach((lines) => {
+    // an OFF_FIELD action or an Outro outside a field dealing under 2% of its own section is noise on
+    // the axis: its hits still count toward the total, they just take no bar
+    let own = 0;
+    const field = new Map<string, number>();
     eachHit(lines, null, (snap, avg) => {
-      // A swap, a start of combat, a field going up, a triggered line that lands nothing: an action
-      // of the log with no damage to show. It takes no slot on the axis either — a run of them is
-      // what used to read as a hole in the chart.
-      if (avg <= 0) return;
-      total += avg;
-      const color = slotHue.get(snap.slot) ?? TUNE_BREAK_ENEMY.color;
-      // a dash-cancel, a swap-out and a Unison outro are the same press as the cast they came from,
-      // so they fold with it rather than as a form of their own
+      own += avg;
+      if (snap.action.tag !== ActionTag.OffField && snap.action.cast !== Cast.Outro) return;
+      const key = `${snap.slot} ${snap.action.name}`;
+      field.set(key, (field.get(key) ?? 0) + avg);
+    });
+    // the action a bar counts toward: a dash-cancel, a swap-out and a Unison outro are the same press
+    // as the cast they came from, so they fold with it rather than as a form of their own
+    const actOf = (snap: ResolvedSnapshot, dmg: number): number => {
       let act = snap.action;
       while (act.cancelOf ?? act.formOf) act = act.cancelOf ?? act.formOf!;
       const key = `${snap.slot} ${act.name}`;
       let at = by.get(key);
       if (at === undefined) {
-        at = acts.push({ name: act.name, color, dmg: 0, casts: 0 }) - 1;
+        at = acts.push({ name: act.name, color: slotHue.get(snap.slot) ?? TUNE_BREAK_ENEMY.color, dmg: 0, casts: 0 }) - 1;
         by.set(key, at);
       }
-      acts[at]!.dmg += avg;
+      acts[at]!.dmg += dmg;
       acts[at]!.casts++;
-      bars.push({ dmg: avg, color, act: at });
-    });
+      return at;
+    };
+    for (const line of lines) {
+      // a field's window (a turret, coordinated attacks) is one bar where its summary row sits, under
+      // the cast that opened it; its hits count toward the total as their own lines
+      if (line.aggregate) {
+        if (line.avg <= 0) continue;
+        const at = actOf(line.snap, line.avg);
+        bars.push({ dmg: line.avg, frames: 0, color: acts[at]!.color, act: at });
+        continue;
+      }
+      eachHit([line], null, (snap, avg) => {
+        // A swap, a start of combat, a field going up, a triggered line that lands nothing: an action
+        // of the log with no damage to show. It takes no slot on the axis either — a run of them is
+        // what used to read as a hole in the chart.
+        if (avg <= 0) return;
+        total += avg;
+        if (line.fieldKey !== undefined) return;
+        if ((field.get(`${snap.slot} ${snap.action.name}`) ?? Infinity) < own * 0.02) return;
+        const at = actOf(snap, avg);
+        // real frames, time stop and all: a press played off field (an Outro, a summon) runs its whole
+        // animation, the rest their time on field — a swap form to its swap, a hold or mash where it let go
+        const off = !snap.active || snap.tag === ActionTag.OffField;
+        const cost = snap.action.cost(snap.tag);
+        let root = snap.action;
+        while (root.cancelOf ?? root.formOf) root = root.cancelOf ?? root.formOf!;
+        const frames = off ? root.animFrames : snap.holdCut >= 0 ? snap.holdCut : cost.action + cost.global;
+        bars.push({ dmg: avg, frames, color: acts[at]!.color, act: at });
+      });
+    }
   });
-  // the whole roster, not just who happened to land a hit here — the key reads the same either way
-  const roster = [...slotHue].map(([name, color]): Caster => ({ name, color }));
-  return { kind: "team", section, total, bars, roster, acts };
+  return { kind: "team", section, total, bars, acts };
 }
 
 /** Every hit in the order it was cast, one bar each — the shape of the rotation rather than a
- *  total. Nothing is named on it: the bars are read against each other and against the key under
- *  them, not off a scale. */
+ *  total. Nothing is named on it: the bars are read against each other, not off a scale. */
 function barChart(bars: Bar[]): string {
   const width = 480, height = 210, left = 2, right = 2, top = 10, foot = 12;
   const plotW = width - left - right, plotH = height - top - foot;
   const f = (n: number): string => n.toFixed(2);
   const peak = Math.max(...bars.map((b) => b.dmg));
-  // a bar's share of the axis goes with the square root of its damage, over a floor that keeps the
-  // smallest hit a sliver rather than nothing
-  const weights = bars.map((b) => 0.15 + Math.sqrt(b.dmg / peak));
+  // a bar's share of the axis is its press's frames, over a floor of a second that keeps a hit with
+  // none (a summon's, an Outro's) readable
+  const weights = bars.map((b) => Math.max(b.frames, 60));
   const unit = plotW / weights.reduce((a, w) => a + w, 0);
+  // a lit bar's fill: its colour brightened by 1.35, the way a CSS brightness() filter would read
+  // without the filter's repaint, which dragged on every hover move
+  const lit = (hex: string): string => `#${[1, 3, 5].map((k) => Math.min(255, Math.round(parseInt(hex.slice(k, k + 2), 16) * 1.35))
+    .toString(16).padStart(2, "0")).join("")}`;
   let x = left;
   const rects = bars.map((b, i) => {
     const h = (b.dmg / peak) * plotH, slot = weights[i]! * unit;
     const rect = `<rect data-act="${b.act}" x="${f(x)}" y="${f(top + plotH - h)}"`
-      + ` width="${f(Math.max(slot * 0.9, 0.6))}" height="${f(h)}" fill="${b.color}"/>`;
+      + ` width="${f(Math.max(slot * 0.9, 0.6))}" height="${f(h)}" fill="${b.color}" style="--lit:${lit(b.color)}"/>`;
     x += slot;
     return rect;
   }).join("");
-  // Drawn to whatever box the pane leaves rather than to its own ratio — the key is pinned under
-  // it, and a chart held to 480:210 left the gap between the two empty. Nothing here is a shape
+  // Drawn to whatever box the pane leaves rather than to its own ratio — a chart held to 480:210
+  // left the pane's slack empty. Nothing here is a shape
   // that stretching would lie about: the bars are the figures, and the axis holds its own weight
   // (`non-scaling-stroke`) instead of thickening with the box.
   return `<svg class="bars" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img">`
@@ -1104,11 +1193,6 @@ function barChart(bars: Bar[]): string {
     + `</svg>`;
 }
 
-/** Who each colour in the chart is, spread evenly under it — `--keys` is how many columns the row
- *  is split into, since a two-member team is two rather than four. */
-const barKey = (roster: Caster[]): string => `<ul class="barkey" style="--keys:${roster.length}">`
-  + `${roster.map((c) => `<li><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</li>`).join("")}</ul>`;
-
 function distBody(cell: DistCell | undefined): string {
   if (!cell || cell.total <= 0) return `<div class="pies"><p class="nodist">No damage in this section.</p></div>`;
   const section = cell.section ? ` (${cell.section})` : "";
@@ -1116,7 +1200,7 @@ function distBody(cell: DistCell | undefined): string {
     shownChart = cell;
     return `<div class="teampanes">`
       + `<figure class="piefig"><figcaption>Damage Over Time${section}</figcaption>`
-      + `<div class="chartwrap">${barChart(cell.bars)}</div>${barKey(cell.roster)}</figure></div>`;
+      + `<div class="chartwrap">${barChart(cell.bars)}</div></figure></div>`;
   }
   return `<div class="pies">${pieFigure(`${cell.slot} Damage Distribution${section}`, cell.types, cell.total)}`
     + `${pieFigure(`${cell.slot} Node Priority${section}`, cell.nodes, cell.total)}</div>`;
@@ -1136,53 +1220,102 @@ const distributionRow = (selected: string): string =>
   `<div class="rtrow dist"><div class="c distbody">${distBody(distCells.get(selected))}</div></div>`;
 
 /** The popup a hovered bar opens at the cursor: its action's colour bar and wash, the name with
- *  every cast of it summed, and its share of the figure the chart is for. One, made on first use. */
+ *  every cast of it summed, and its share of the figure the chart is for. One, made on first use;
+ *  rebuilt and measured only when the action changes, and otherwise just moved. */
 let barPop: HTMLElement | null = null;
+let barPopAct: BarAction | null = null, barPopSize = { width: 0, height: 0 };
 function showBarPop(act: BarAction, total: number, x: number, y: number): void {
   if (!barPop) {
     barPop = document.createElement("div");
     barPop.className = "barpop";
     document.body.append(barPop);
   }
-  barPop.style.setProperty("--own", act.color);
-  barPop.innerHTML = `<span class="nm">${esc(act.name)}${act.casts > 1 ? ` x${act.casts}` : ""}</span>`
-    + `<span class="v">${fmt(act.dmg)}</span><span class="pct">${fmt((act.dmg / total) * 100, 1)}%</span>`;
   barPop.hidden = false;
+  if (act !== barPopAct) {
+    barPopAct = act;
+    barPop.style.setProperty("--own", act.color);
+    barPop.innerHTML = `<span class="nm">${esc(act.name)}${act.casts > 1 ? ` x${act.casts}` : ""}</span>`
+      + `<span class="v">${fmt(act.dmg)}</span><span class="pct">${fmt((act.dmg / total) * 100, 1)}%</span>`;
+    barPopSize = barPop.getBoundingClientRect();
+  }
   // its bottom-right corner on the pointer, or its bottom-left where the viewport runs out first
-  const { width, height } = barPop.getBoundingClientRect();
+  const { width, height } = barPopSize;
   barPop.style.left = `${x - width < 0 ? x : x - width}px`;
   barPop.style.top = `${y - height}px`;
 }
+const hideBarPop = (): void => {
+  if (!barPop) return;
+  barPop.hidden = true;
+  barPopAct = null;
+};
+
+/** A chart's bars as the hover reads them, read off the svg once: each bar's left edge in view units,
+ *  its action, and every bar of each action. */
+interface BarGeometry { lefts: number[]; acts: number[]; byAct: Map<number, SVGRectElement[]> }
+const BAR_GEOMETRY = new WeakMap<SVGSVGElement, BarGeometry>();
+function barGeometry(svg: SVGSVGElement): BarGeometry {
+  let g = BAR_GEOMETRY.get(svg);
+  if (g) return g;
+  g = { lefts: [], acts: [], byAct: new Map() };
+  for (const r of svg.querySelectorAll<SVGRectElement>("rect[data-act]")) {
+    const act = Number(r.dataset.act);
+    g.lefts.push(r.x.baseVal.value);
+    g.acts.push(act);
+    const own = g.byAct.get(act);
+    if (own) own.push(r);
+    else g.byAct.set(act, [r]);
+  }
+  BAR_GEOMETRY.set(svg, g);
+  return g;
+}
 
 /** Hovering the chart: the bar under the cursor's own column (the bars are too thin to aim at),
- *  every bar of the same action lit, and the popup for that action. */
+ *  every bar of the same action lit, and the popup for that action — one update a frame. */
 function wireBarHover(body: HTMLElement): void {
-  let lit = -1;
-  const light = (act: number): void => {
-    if (act === lit) return;
-    lit = act;
-    for (const r of body.querySelectorAll<SVGRectElement>("svg.bars rect[data-act]")) r.classList.toggle("lit", Number(r.dataset.act) === act);
+  // keyed on the bars themselves, which a redrawn chart (another figure clicked) never shares
+  let lit: SVGRectElement[] = [];
+  const light = (rects: SVGRectElement[]): void => {
+    if (rects === lit) return;
+    for (const r of lit) r.classList.remove("lit");
+    for (const r of rects) r.classList.add("lit");
+    lit = rects;
   };
-  body.addEventListener("mousemove", (e) => {
+  const NONE: SVGRectElement[] = [];
+  let last: MouseEvent | null = null, queued = false;
+  const update = (): void => {
+    queued = false;
+    const e = last;
+    if (!e) return;
     const svg = (e.target as Element).closest<SVGSVGElement>("svg.bars");
-    const bars = svg ? [...svg.querySelectorAll<SVGRectElement>("rect[data-act]")] : [];
-    if (!svg || !shownChart || !bars.length) {
-      light(-1);
-      if (barPop) barPop.hidden = true;
+    const g = svg ? barGeometry(svg) : null;
+    if (!svg || !g || !shownChart || !g.lefts.length) {
+      light(NONE);
+      hideBarPop();
       return;
     }
     // the column under the cursor is the bar: its own slot runs from its left edge to the next's
     const box = svg.getBoundingClientRect(), view = svg.viewBox.baseVal;
     const at = ((e.clientX - box.left) / box.width) * view.width;
-    let i = 0;
-    while (i + 1 < bars.length && bars[i + 1]!.x.baseVal.value <= at) i++;
-    const act = Number(bars[i]!.dataset.act);
-    light(act);
+    let lo = 0, hi = g.lefts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (g.lefts[mid]! <= at) lo = mid;
+      else hi = mid - 1;
+    }
+    const act = g.acts[lo]!;
+    light(g.byAct.get(act) ?? NONE);
     showBarPop(shownChart.acts[act]!, shownChart.total, e.clientX, e.clientY);
+  };
+  body.addEventListener("mousemove", (e) => {
+    last = e;
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(update);
   });
   body.addEventListener("mouseleave", () => {
-    light(-1);
-    if (barPop) barPop.hidden = true;
+    last = null;
+    light(NONE);
+    hideBarPop();
   });
 }
 
