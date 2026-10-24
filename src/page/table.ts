@@ -36,6 +36,9 @@ import { HOLD, watchTouch, swallowClick, grabDot, makeDot } from "./cellpick.js"
 import type { CopyMode } from "./panels.js";
 import { portrait, loadPortraits } from "./portraits.js";
 import { ownership, saveOwnershipPreference } from "../ownership.js";
+import { matrixState } from "../matrix/state.js";
+import { matrixLineup } from "../matrix/lineup.js";
+import { changeMatrixControl } from "../matrix/controls.js";
 
 const app = document.getElementById("app")!;
 const topbar = document.getElementById("topbar")!;
@@ -387,7 +390,7 @@ interface RowRank { hue: number; pct: string; pinned: boolean }
 let tableView: TableView | null = null;
 
 /** The whole page's markup: the aside and the table shell. Rows are drawn by `drawWindow()`. */
-function comparisonTable(rows: TeamRow[]): string {
+function comparisonTable(rows: TeamRow[], matrixSummary = ""): string {
   const seq = (run: TeamRun): number => run.combo.reduce((n, c) => n + c.sequence, 0);
   // a tie is the rank buying nothing, and the row that paid for it is the one that answers
   // "is R5 worth it" — so the higher rank stands above the one it drew with rather than under it
@@ -433,6 +436,7 @@ function comparisonTable(rows: TeamRow[]): string {
     }
     return teamFigure(b.run) - teamFigure(a.run) || seq(b.run) - seq(a.run) || rank(b.run) - rank(a.run);
   }).map((k) => k.pair);
+  if (matrixState.enabled) sorted.sort((a, b) => b[1].total - a[1].total || a[0].localeCompare(b[0]));
 
   // column order, left to right — the same order the name menu offers the compares in
   // (solver.ts's own AXES), with the substat spread last: it is the whole build's investment
@@ -741,6 +745,7 @@ function comparisonTable(rows: TeamRow[]): string {
     + `<aside class="tcside">${comparisonFilters()}</aside>`
     + `<div class="tcbody">`
     + `<h2 class="summary-label" id="teamCount">${fmt(sorted.length)} teams`
+    + (matrixSummary ? `<span class="hint">${esc(matrixSummary)}</span>` : "")
     + `<span class="hint">${CLICK} on a Resonator to filter and compare sequences, weapons, echoes</span></h2>`
     + `<div class="tcwrap"><div class="tgrid${hueShown ? " hued" : ""}" style="${gridStyle}">${head}${ghost()}</div></div>`
     + `</div></div></main>`;
@@ -1233,12 +1238,23 @@ for (const type of ["pointerdown", "keydown", "wheel"]) {
   addEventListener(type, () => { openingFocus = false; }, { capture: true, once: true });
 }
 
-export function renderComparison(): void {
+let comparisonGeneration = 0;
+export async function renderComparison(): Promise<void> {
+  const generation = ++comparisonGeneration;
+  const hash = location.hash;
+  const rows = visibleRows;
+  const enabled = matrixState.enabled, extraVigor = matrixState.extraVigor;
+  const stale = (): boolean => generation !== comparisonGeneration || hash !== location.hash
+    || rows !== visibleRows || enabled !== matrixState.enabled || extraVigor !== matrixState.extraVigor;
+  const count = app.querySelector("#teamCount");
+  if (enabled && count) count.textContent = "Selecting Matrix lineup…";
+  const lineup = enabled ? await matrixLineup(rows, results, stale) : { rows, summary: "" };
+  if (stale()) return;
   topbar.hidden = true;
   clearPops();
   const scrollTop = app.querySelector(".tgrid") ? (app.querySelector("main")?.scrollTop ?? 0) : tableScrollTop;
   clearBlock();
-  app.innerHTML = comparisonTable(visibleRows);
+  app.innerHTML = comparisonTable(lineup.rows, lineup.summary);
   loadPortraits(app);
   app.className = "";
   measured = false;
@@ -1298,6 +1314,7 @@ document.addEventListener("click", (e) => {
   renderComparison();
 });
 document.addEventListener("change", (e) => {
+  if (changeMatrixControl(e.target, withRowCap)) return;
   const input = e.target as HTMLInputElement;
   if (input.id === "onlyOwned") {
     withRowCap(() => {

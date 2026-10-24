@@ -12,6 +12,7 @@ import { esc, CLICK } from "./panels.js";
 import { MAKAN_COST_LABEL, MAKAN_COST_OVERRIDES } from "../costs.js";
 
 import { ownership, ownsCharacter } from "../ownership.js";
+import { matrixControls } from "../matrix/controls.js";
 
 const app = document.getElementById("app")!;
 
@@ -237,6 +238,7 @@ export function comparisonFilters(): string {
       <div class="tcopt"><label class="tcopt-role" title="Show teams where every character is owned.">
         <input id="onlyOwned" type="checkbox"${ownership.onlyOwned ? " checked" : ""}>Only characters I own
       </label></div>
+      ${matrixControls(RESONATOR_HUE.keys(), esc)}
       <div class="tcsearchrow">
         <div class="tcsearch">
           <input id="optionSearch" type="search" placeholder="Add resonator or comparison..."
