@@ -2,20 +2,22 @@
  * The detail page: the DPR and energy tables, the action log grid, and the log's draggable
  * column order (kept in localStorage) with its pointer handlers.
  */
-import { Stat, Cast, SCALING_NAME, ActionTag, statLabel } from "../engine/stats.js";
+import { Stat, Cast, SCALING_NAME, ActionTag, statLabel, ENERGY_UNIT } from "../engine/stats.js";
 import type { Gear } from "../engine/gear.js";
 import { menuStats } from "../engine/context.js";
 import { TUNE_BREAK_ENEMY } from "../shared/tunebreak.js";
 import type { ChainGroup, ResolvedSnapshot } from "../engine/evaluate.js";
-import { columnOf, gaugeSuffix, fmt, digitsOf, PAD_DIGITS_COLUMNS, GROUPED_COLUMNS, OFFTUNE_RATE, ENERGY_RATE } from "../display.js";
-import type { Report, Column, ReportRow, ReportPart, TraceEntry } from "../display.js";
-import type { TeamRun } from "../teamrun.js";
-import { hitsOf, erRollsFor } from "../teamrun.js";
+import { gaugeSuffix, fmt, fmtPct, fmtPctCell, digitsOf, PAD_DIGITS_COLUMNS, GROUPED_COLUMNS, RATE_SECTIONS } from "./display.js";
+import type { Report, Column, ReportRow, ReportPart } from "./display.js";
+import type { TeamRun } from "../solve/teamrun.js";
+import { hitsOf, erRollsFor } from "../solve/teamrun.js";
 import { ER_TOLERANCE } from "../shared/substats.js";
 import { results, detailFor, FALLBACK_HUE } from "./model.js";
-import { esc, lazyPop, rect, zoom, clearPops, panelRow, popover, infoPopover, buffsPopover, framesPopover, equippedGear, dprTable, loadoutTable, wireDistribution, drivePanel, dropPanel, holdPanels } from "./panels.js";
+import { esc, lazyPop, rect, zoom, clearPops, popover, hitsPopover, infoPopover, buffsPopover, framesPopover, equippedGear, dprTable, loadoutTable, wireDistribution, drivePanel, dropPanel, holdPanels, panelOpenOn, copyBlock } from "./panels.js";
+import { HOLD, watchTouch, swallowClick, grabDot, makeDot } from "./cellpick.js";
 import { rememberTableScroll } from "./table.js";
 import { loadPortraits } from "./portraits.js";
+import { canPick } from "./pickmenu.js";
 
 const app = document.getElementById("app")!;
 const topbar = document.getElementById("topbar")!;
@@ -37,7 +39,7 @@ function cell(col: Column, { cls = [], html = "", pop = "", style = "", attr = "
 /** Which colour a cut's tag box wears (index.css `.ctag-*`). */
 const TAG_KIND: Partial<Record<ActionTag, string>> = {
   [ActionTag.InstaCancel]: "insta", [ActionTag.InstaDodge]: "insta", [ActionTag.InstaJump]: "insta", [ActionTag.InstaSwap]: "insta",
-  [ActionTag.SwapCancel]: "swap", [ActionTag.MashCancel]: "easy", [ActionTag.HoldCancel]: "easy", [ActionTag.Field]: "field",
+  [ActionTag.SwapCancel]: "swap", [ActionTag.MashSwap]: "swap", [ActionTag.MashCancel]: "easy", [ActionTag.HoldCancel]: "easy", [ActionTag.OffField]: "field",
   [ActionTag.DodgeCancel]: "dash", [ActionTag.JumpCancel]: "jump", [ActionTag.Cancel]: "cancel", [ActionTag.HitCancel]: "hit", [ActionTag.DodgeOnHit]: "hit", [ActionTag.JumpOnHit]: "hit",
 };
 
@@ -47,12 +49,13 @@ const TAG_NOTE: Partial<Record<ActionTag, string>> = {
   [ActionTag.InstaDodge]: "After casting, dodge instantly",
   [ActionTag.InstaJump]: "After casting, jump instantly",
   [ActionTag.InstaSwap]: "After casting, swap instantly",
-  [ActionTag.Cancel]: "After the final hit, input the next action",
-  [ActionTag.DodgeCancel]: "After the final hit, dodge",
-  [ActionTag.JumpCancel]: "After the final hit, jump",
-  [ActionTag.SwapCancel]: "After the final hit, swap",
-  [ActionTag.MashCancel]: "After casting, mash the next input to cancel on the final hit",
-  [ActionTag.HoldCancel]: "After casting, hold the next input to cancel upon receiving forte",
+  [ActionTag.Cancel]: "After the final hit, input the next action to cancel endlag",
+  [ActionTag.DodgeCancel]: "After the final hit, dodge to cancel endlag",
+  [ActionTag.JumpCancel]: "After the final hit, jump to cancel endlag",
+  [ActionTag.SwapCancel]: "After the final hit, swap to cancel endlag",
+  [ActionTag.MashSwap]: "After casting, mash swap to swap out the moment it allows",
+  [ActionTag.MashCancel]: "After casting, mash the next input to cancel when available",
+  [ActionTag.HoldCancel]: "After casting, hold the next input to cancel when available",
   [ActionTag.HitCancel]: "After the first hit, input the next action",
   [ActionTag.DodgeOnHit]: "After the first hit, dodge",
   [ActionTag.JumpOnHit]: "After the first hit, jump",
@@ -75,12 +78,16 @@ function stepRow(
     let attr = "";
     if (isRunning(col.key)) {
       if ("line" in row && row.line.aggregate) return cell(col);
-      const cast = ("line" in row ? row.line.snap : row.snap).action.cast;
-      const spend = col.key === "offtune" ? cast === Cast.TuneBreak
+      const act = ("line" in row ? row.line.snap : row.snap).action, cast = act.cast;
+      // a Tune Break's response casts as one too, but only the break drains the bar
+      const spend = col.key === "offtune" ? cast === Cast.TuneBreak && act.castOfftune < 0
+        : col.key === "energy" ? act.castEnergy < 0
         : col.key === "concerto" && cast === Cast.Outro;
       const before = Number(row.raw[`before:${col.key}`]) || 0;
       if (!spend) attr = ` data-val="${Number(v) || 0}" data-before="${before}"`;
-      const fed = (sources ?? []).some((r) => r.section !== OFFTUNE_RATE && r.section !== ENERGY_RATE);
+      // energy's block total reads what each row's own press generated, unbuffed: no ER, nothing shared
+      if (!spend && col.key === "energy") attr += ` data-gen="${Number(row.raw["gen:energy"]) || 0}"`;
+      const fed = (sources ?? []).some((r) => !RATE_SECTIONS.has(r.section ?? ""));
       if (!fed && Math.abs((Number(v) || 0) - before) < 1e-9) return cell(col, { attr });
     }
     const cls: string[] = [];
@@ -91,18 +98,20 @@ function stepRow(
     // a gauge this cast wipes before its own delta lands — the panel carries the CLEAR row that
     // says so (display.ts), and the underline is what points at it
     if (col.key.startsWith("gauge:") && Number(row.raw[`clear:${col.key}`])) cls.push("buffed");
-    if ((col.key === "concerto" || col.key === "energy") && Number(row.raw[`short:${col.key}`])) cls.push("underspent");
-    if (col.key.startsWith("gauge:") && Number(row.raw[`short:${col.key}`])) cls.push("negative");
+    // every bar alike: outside the cast's condition, or left below empty
+    if (isRunning(col.key) && Number(row.raw[`short:${col.key}`])) cls.push("negative");
+    // a press cast without a buff its condition names
+    if (col.key === "action" && row.raw["short:buff"]) cls.push("negative");
 
-    const text = esc(fmt(v, digitsOf(row.raw, col), PAD_DIGITS_COLUMNS.has(col.key), GROUPED_COLUMNS.has(col.key)))
-      + (col.percent && typeof v === "number" ? "%" : "") + gaugeSuffix(row.raw, col.key);
+    const text = (col.percent && typeof v === "number" ? `${fmtPctCell(v, col.key, PAD_DIGITS_COLUMNS.has(col.key))}%`
+      : esc(fmt(v, digitsOf(row.raw, col), PAD_DIGITS_COLUMNS.has(col.key), GROUPED_COLUMNS.has(col.key)))) + gaugeSuffix(row.raw, col.key);
     let html = sources && text ? `<span class="has">${text}</span>` : text;
     if (col.key === "action" && caret && !part && "parts" in row && row.parts.length) {
       html = `${html}<span class="caret">▸</span>`;
     }
     const tag = col.key === "action" ? String(row.raw["tag:action"] ?? "") : "";
     // the tag's own box, coloured by what cut the press — an insta anything red (insta swap too), a
-    // swap cancel yellow, a mash or hold cancel green, then a dash, a jump, and a plain cancel — or gray
+    // swap form yellow, a mash or hold cancel green, then a dash, a jump, and a plain cancel — or gray
     // for a press beside the fight
     if (tag) {
       const kind = TAG_KIND[tag as ActionTag] ?? "cancel", note = TAG_NOTE[tag as ActionTag];
@@ -122,6 +131,10 @@ function stepRow(
       const snap = "line" in row ? row.line.snap : row.snap;
       const gear = gearByMember.get(snap.member) ?? [];
       pop = buffsPopover(snap.member, gear, snap.heldLocal, snap.heldGlobal, snap.heldEnemy, slotHue);
+    } else if (col.key === "avg") {
+      pop = text ? hitsPopover(row.hits) : "";
+    } else if (col.key === "position") {
+      pop = "";
     } else if (text) {
       // a running counter's panel foots to what this action moved it by, not the balance
       pop = popover(col, sources, row.raw[`moved:${col.key}`] ?? v, slotHue, suffix, String(row.raw[`empty:${col.key}`] ?? ""));
@@ -251,85 +264,51 @@ function rotationTable(report: Report, slotHue: Map<string, string>, gearByMembe
 
 /* ---------------------------------------------------------------------------------- energy */
 
-/** Indices in `flat[from, to)` where `member` casts a `resetEnergy` action. */
-function resetIndices(flat: ChainGroup[], from: number, to: number, member: string): number[] {
-  const out: number[] = [];
-  for (let i = from; i < to; i++) {
-    const snap = flat[i]!.snap;
-    if (snap.member === member && snap.action.resetEnergy) out.push(i);
-  }
-  return out;
-}
-
-/**
- * The constant ER a member needs for the bar to be full at `resetIdx`. The engine banks RealEnergy
- * at a flat rate, so `realEnergyBefore` is what the window generated at 100%; each of the member's
- * own gains scales with their ER at the time (constant + buff), a teammate's share with the constant
- * alone. Solve `before * C/100 + sum(own gain * buff)/100 = maxEnergy` for C. 0 for a costless
- * Liberation, null where nothing was banked.
- */
-function erRequirement(flat: ChainGroup[], resetIdx: number, member: string, maxEnergy: number, constant: number): number | null {
-  if (!maxEnergy) return 0;
-  const before = flat[resetIdx]!.snap.realEnergyBefore;
-  if (before <= 0) return null;
-  let buffed = 0;
-  walk: for (let i = resetIdx - 1; i >= 0; i--) {
-    const line = flat[i]!;
-    if (line.aggregate) continue;
-    const snaps = hitsOf(line);
-    for (let k = snaps.length - 1; k >= 0; k--) {
-      const s = snaps[k]!;
-      if (s.member !== member) continue;
-      if (s.action.resetEnergy) break walk;
-      if (s.endsLoop) continue;
-      const gain = (s.action.energy + s.stat(Stat.AddEnergy) + (s.castGain?.[0] ?? 0)) * (1 + s.stat(Stat.EnergyRegenMult) / 100);
-      buffed += gain * (s.stat(Stat.Er) - constant);
-    }
-  }
-  return (maxEnergy * 100 - buffed) / before;
-}
-
 /**
  * What each member's Liberations asked of their constant ER — the most any one of them wanted, which
  * the Energy Regen menu stat carries in its own label. Its colour says whether what the build wears
  * covers it.
  */
-function energyRequirements(run: TeamRun, lines: ChainGroup[][]): Map<string, Map<string, string>> {
-  const flat = lines.flat();
+function energyRequirements(run: TeamRun): Map<string, Map<string, string>> {
+  const { needs } = detailFor(run);
   const erOf = erRollsFor(run.teamKey, run.members, run.combo);
 
   const cells = new Map<string, Map<string, string>>();
   run.members.forEach((m, idx) => {
     const own = new Map<string, string>();
     cells.set(m.name, own);
-    const maxEnergy = m.loadout.resonator.maxEnergy;
     const combo = run.combo[idx]!;
-    const constantSources = menuStats(m.loadout.pieces(combo.weapon, combo.echo, combo.mainstat, combo.sequence, combo.matrix !== null, combo.highSubs, erOf[idx]!))
-      .filter((e) => e.stat === Stat.Er);
-    const constant = constantSources.reduce((n, e) => n + e.value, 0);
-
-    // the fight's very first Liberation runs on the bar `combatStart` hands over, so it asks nothing
-    const casts = resetIndices(flat, 0, flat.length, m.name).slice(1);
-    const asked = casts.map((i) => erRequirement(flat, i, m.name, maxEnergy, constant)).filter((v): v is number => v != null);
-    const bar = asked.length ? Math.max(...asked) : null;
-    const name = m.loadout.resonator.name;
-    // One hover line per requirement, its figure green where the build's character screen covers it
-    // and red where it falls short; the label carries the higher of them.
+    const { bar, minEr, constant, gen } = needs.get(m.name)!;
+    // One hover row per line — its label, its figure in a right-aligned column, then any note — a
+    // requirement's figure green where the build's character screen covers it and red where it
+    // falls short; the label carries the higher of them.
+    const row = (what: string, figure: string, note = ""): string =>
+      `<tr><td class="k">${esc(what)}</td><td class="v">${figure}</td><td class="n">${note}</td></tr>`;
     const line = (what: string, need: number, held: number): { html: string; met: boolean } => {
       const met = need <= held + ER_TOLERANCE;
-      return { met, html: `<div>${what}: <span class="${met ? "need-met" : "need-miss"}">${fmt(need, 1, true)}%</span> (${met ? "Met" : "Not Met"})</div>` };
+      return { met, html: row(what, `<span class="${met ? "need-met" : "need-miss"}">${fmtPct(need)}%</span>`, met ? "(Met)" : "(Not Met)") };
     };
     const tag = (need: number, met: boolean, lines: string[]): string => {
-      const tip = lazyPop(`<span class="pop tip">${lines.join("")}</span>`);
-      return `<span class="erneed has"${tip}>> <span class="erreq ${met ? "er-met" : "er-under"}">${fmt(need, 1, true)}%</span></span>`;
+      const tip = lazyPop(`<span class="pop tip"><table>${lines.join("")}</table></span>`);
+      return `<span class="erneed has"${tip}>> <span class="erreq ${met ? "er-met" : "er-under"}">${fmtPct(need)}%</span></span>`;
     };
-    const minEr = m.loadout.minEr;
     if (bar != null || minEr) {
       const lines: { html: string; met: boolean }[] = [];
-      if (bar != null) lines.push(line("Energy Regen requirement", bar, constant));
       if (minEr) lines.push(line("Energy Regen requirement for kit", minEr, constant));
+      if (bar != null) lines.push(line("Energy Regen requirement", bar, constant));
+      // what went into the spend that asked it, before any ER: their own gen (flat gains in), then
+      // each ally's half
+      if (bar != null && gen) {
+        const pt = (v: number): string => fmt(v / ENERGY_UNIT, 2, true);
+        const gained = (text: string, v: number) => ({ met: true, html: row(text, pt(v)) });
+        lines.push(
+          gained(`${m.name} energy gen`, gen.hit + gen.flat),
+          ...gen.shared.map(([ally, v]) => gained(`${ally} energy shared`, v)),
+          gained("Total energy gen", gen.hit + gen.flat + gen.shared.reduce((n, [, v]) => n + v, 0)),
+        );
+      }
       const need = Math.max(bar ?? 0, minEr);
-      own.set(statLabel(Stat.Er), tag(need, need <= constant + ER_TOLERANCE, lines.map((l) => l.html)));
+      own.set(statLabel(Stat.ER), tag(need, need <= constant + ER_TOLERANCE, lines.map((l) => l.html)));
     }
     // and the kit's own Crit Rate minimum, against what the character screen shows
     const minCr = m.loadout.minCritRate;
@@ -361,7 +340,7 @@ function page(run: TeamRun): string {
   <div class="rtables">
     <div class="rtable-block">
       <h2 class="summary-label">Equipment</h2>
-      ${loadoutTable(run, energyRequirements(run, lines))}
+      ${loadoutTable(run, energyRequirements(run), (slot, kind) => canPick(run, slot, kind))}
     </div>
     <div class="rstack">
       <div class="rtable-block">
@@ -389,7 +368,21 @@ export function renderDetail(key: string): void {
   wireColumnDrag(app, detailFor(run).report.columns);
   wireCellSelect(app);
   wireDistribution(app);
+  const pair = app.querySelector<HTMLElement>(".rtables");
+  if (pair) pairFit.observe(pair);
 }
+
+/** Damage Contribution fills the line beside Equipment; wrapped under it, it takes Equipment's width
+ *  rather than the whole line's. Measured with the cap off, so widening the page lets it back up. */
+const pairFit = new ResizeObserver((entries) => {
+  for (const { target } of entries) {
+    const equip = target.firstElementChild as HTMLElement | null;
+    const stack = target.querySelector<HTMLElement>(".rstack");
+    if (!equip || !stack) continue;
+    stack.style.maxWidth = "";
+    if (stack.offsetTop > equip.offsetTop) stack.style.maxWidth = `${equip.offsetWidth}px`;
+  }
+});
 
 /* ------------------------------------------------------------------------- column order */
 
@@ -519,7 +512,7 @@ function doubled(row: HTMLElement, held: Set<HTMLElement>): boolean {
  *  block gained of it: each row's balance less the one it was entered on, added up, so the run
  *  reads from the balance standing before the block (0 at the top of the run) and the Tune Break
  *  that takes the whole bar drops out rather than reading as a loss across it. Energy generated
- *  adds up the same way. A member's own concerto and forte are left to their columns; nothing else
+ *  adds up each row's own press's raw energy: no ER, multiplier or shared gain. A member's own concerto and forte are left to their columns; nothing else
  *  in the block earns a line,
  *  and a block with no line at all has no panel. An opened group's own row is left out where the
  *  block holds the rows it opened onto (`doubled`). */
@@ -545,9 +538,9 @@ function blockPanel(sel: CellSel): string {
       }
       if (c.dataset.val === undefined) continue;
       const col = logColumns[[...c.parentElement!.children].indexOf(c)]!;
-      // energy counts up all fight, each row on its own member's bar: the gains add up as they are
+      // energy: each row's own unbuffed generation (`gen:energy`), its Liberation's spend left out
       if (col.key === "energy") {
-        energy += (Number(c.dataset.val) || 0) - (Number(c.dataset.before) || 0);
+        energy += Number(c.dataset.gen) || 0;
         energyDigits = col.digits ?? 2;
         energyCells++;
         continue;
@@ -589,12 +582,19 @@ interface CellSel {
   r1: number;
   c0: number;
   c1: number;
+  /** Picked by a finger, which gives it the dot (`grabCellDot`). */
+  touch: boolean;
+  /** While the dot is dragged, the edges it sits on. */
+  dot?: [number, number];
 }
+/** Where a press landed: the rows and columns it found and its own cell among them. */
+type CellAt = Pick<CellSel, "rows" | "cols" | "ar" | "ac">;
 
 /** The block of cells a press ran over — a reading marker like the singled-out column, and the
  *  same one: taking either takes the other off. */
 let cellSel: CellSel | null = null;
 let cellSelBox: HTMLElement | null = null;
+let cellSelDot: HTMLElement | null = null;
 /** Whether a press is down on the log, where its pointer last was in page px, and the page's own
  *  zoom as the press found it — read again on every report, it costs a look at the table's layout
  *  for each one, which is what a pointer handler must do least of. */
@@ -607,12 +607,19 @@ function clearBlock(): void {
   cellSel = null;
   cellSelBox?.remove();
   cellSelBox = null;
+  cellSelDot?.remove();
+  cellSelDot = null;
 }
 
-/** Where row `i` sits inside the grid, measured on the first ask and kept after (`span`). */
+/** Where row `i` sits inside the grid, measured on the first ask and kept after (`span`). The
+ *  pinned heading is taken where it sits unpinned, just above the first row. */
 function rowSpan(sel: CellSel, i: number, gridTop: number): [number, number] {
   const seen = sel.span[i];
   if (seen) return seen;
+  if (i === 0 && sel.rows.length > 1) {
+    const below = rowSpan(sel, 1, gridTop)[0];
+    return (sel.span[0] = [below - rect(sel.rows[0]!).height, below]);
+  }
   const r = rect(sel.rows[i]!);
   const at: [number, number] = [r.top - gridTop, r.bottom - gridTop];
   sel.span[i] = at;
@@ -633,6 +640,77 @@ function aimBlock(sel: CellSel, row: number, col: number, gridTop: number): void
   box.style.top = `${top}px`;
   box.style.width = `${sel.cols[sel.c1]!.right - left}px`;
   box.style.height = `${rowSpan(sel, sel.r1, gridTop)[1] - top}px`;
+  paintCellDot(sel, gridTop);
+}
+
+/* Edges for the dot, inside the grid: row edge `r` is row `r`'s top, column edge `c` column `c`'s left,
+   the last of each the far side. */
+const edgeTop = (sel: CellSel, r: number, gridTop: number): number =>
+  (r < sel.rows.length ? rowSpan(sel, r, gridTop)[0] : rowSpan(sel, sel.rows.length - 1, gridTop)[1]);
+const edgeLeft = (sel: CellSel, c: number): number =>
+  (c < sel.cols.length ? sel.cols[c]!.left : sel.cols[sel.cols.length - 1]!.right);
+
+/** A finger's block wears its dot on the corner being dragged, the bottom-right at rest. */
+function paintCellDot(sel: CellSel, gridTop: number): void {
+  if (!sel.touch) return;
+  const dot = cellSelDot ?? (cellSelDot = makeDot(sel.grid, grabCellDot));
+  const [r, c] = sel.dot ?? [sel.r1 + 1, sel.c1 + 1];
+  dot.style.left = `${edgeLeft(sel, c)}px`;
+  dot.style.top = `${edgeTop(sel, r, gridTop)}px`;
+}
+
+/** The edges nearest page point `x`/`y`, walked from the last row reached as `trackBlock` walks. */
+function edgeAt(sel: CellSel, x: number, y: number): [number, number] {
+  const g = rect(sel.grid);
+  const at = y - g.top, n = sel.rows.length;
+  let r = Math.min(Math.max(sel.fr, 0), n);
+  while (r < n && edgeTop(sel, r + 1, g.top) <= at) r++;
+  while (r > 0 && edgeTop(sel, r, g.top) > at) r--;
+  if (r < n && edgeTop(sel, r + 1, g.top) - at < at - edgeTop(sel, r, g.top)) r++;
+  sel.fr = Math.min(r, n - 1);
+  let c = 0;
+  for (let k = 1; k <= sel.cols.length; k++) if (Math.abs(edgeLeft(sel, k) - (x - g.left)) < Math.abs(edgeLeft(sel, c) - (x - g.left))) c = k;
+  return [r, c];
+}
+
+/** The dot pressed: the block's far corner follows the finger. */
+function grabCellDot(e: PointerEvent): void {
+  const sel = cellSel;
+  if (!sel) return;
+  dropPanel();
+  // groups may have opened since: the block's rows are found again by element
+  const rows = [...sel.grid.querySelectorAll<HTMLElement>(".r")].filter((r) => r.offsetParent);
+  const r0 = rows.indexOf(sel.rows[sel.r0]!), r1 = rows.indexOf(sel.rows[sel.r1]!);
+  if (r0 < 0 || r1 < 0) {
+    clearBlock();
+    return;
+  }
+  Object.assign(sel, { rows, span: [], r0, r1, fr: r1 });
+  grabDot(e, {
+    grid: sel.grid,
+    corners: () => [[sel.r0, sel.c0], [sel.r1 + 1, sel.c1 + 1]],
+    edgeAt: (x, y) => edgeAt(sel, x, y),
+    edgePoint: (r, c) => {
+      const g = rect(sel.grid);
+      return [g.left + edgeLeft(sel, c), g.top + edgeTop(sel, r, g.top)];
+    },
+    limits: () => [[0, 0], [sel.rows.length, sel.cols.length]],
+    aim: (from, to) => {
+      sel.dot = to;
+      sel.ar = Math.min(from[0], to[0]);
+      sel.ac = Math.min(from[1], to[1]);
+      aimBlock(sel, Math.max(from[0], to[0]) - 1, Math.max(from[1], to[1]) - 1, rect(sel.grid).top);
+      sel.fr = to[0];
+    },
+    done: () => {
+      sel.dot = undefined;
+      const gridTop = rect(sel.grid).top;
+      paintCellDot(sel, gridTop);
+      // the sum rides the block's bottom-right cell
+      const html = sel.r0 === sel.r1 ? "" : blockPanel(sel);
+      if (html) drivePanel(sel.rows[sel.r1]!.children[sel.cols[sel.c1]!.nth]!, html);
+    },
+  });
 }
 
 /** The block's own cells, a row of them at a time. */
@@ -662,6 +740,9 @@ function trackBlock(): void {
   let row = Math.min(Math.max(sel.fr, 0), sel.rows.length - 1);
   while (row < sel.rows.length - 1 && y > rowSpan(sel, row, g.top)[1]) row++;
   while (row > 0 && y < rowSpan(sel, row, g.top)[0]) row--;
+  // the heading is reached wherever it is pinned, over whichever rows it hides
+  const head = rect(sel.rows[0]!);
+  if (py >= head.top && py < head.bottom) row = 0;
   const x = px - g.left;
   let col = 0;
   while (col < sel.cols.length - 1 && x >= sel.cols[col + 1]!.left) col++;
@@ -711,6 +792,27 @@ addEventListener("click", (e) => {
   if (target?.closest?.(".gridwrap .grid .chain > label.r") && !target.closest(".c.action")) e.preventDefault();
 }, true);
 
+/** A group's toggle keeps focus only when Tab walked to it: one a click focused would light its
+ *  ring (`.tgl:focus-visible`) on the next key pressed — a Ctrl+C or a screenshot's shortcut. */
+let tabbed = false;
+addEventListener("keydown", (e) => {
+  if (e.key === "Tab") tabbed = true;
+}, true);
+addEventListener("pointerdown", () => {
+  tabbed = false;
+}, true);
+addEventListener("focusin", (e) => {
+  const t = e.target as Element | null;
+  if (!tabbed && t instanceof HTMLInputElement && t.matches(".gridwrap .tgl")) t.blur();
+}, true);
+
+/** A cell's text as copied: a cut's tag, drawn ahead of the action's name, follows it. */
+function copyText(c: HTMLElement): string {
+  const tag = c.querySelector(".ctag");
+  const name = [...c.childNodes].filter((n) => n !== tag).map((n) => n.textContent ?? "").join("").replace("▸", "").trim();
+  return tag ? `${name} ${(tag.textContent ?? "").trim()}` : name;
+}
+
 /** Ctrl+C takes a copy of the block, a row to a line and a tab between columns — the figures as the
  *  table sets them, so what lands in a spreadsheet reads the way the log does. */
 addEventListener("keydown", (e) => {
@@ -718,80 +820,23 @@ addEventListener("keydown", (e) => {
   const loose = getSelection();
   if (loose && !loose.isCollapsed) return;
   e.preventDefault();
-  const text = blockCells(cellSel)
-    .map((row) => row.map((c) => (c.textContent ?? "").replace("▸", "").trim()).join("\t")).join("\n");
-  navigator.clipboard?.writeText(text).catch(() => { /* nowhere to put it */ });
+  copyBlock(blockCells(cellSel).map((row) => row.map(copyText)));
 });
 
-/**
- * Press and drag over the log to pick out a block of cells: any rectangle, any columns. The block
- * wears the same white outline a singled-out column does, and stands from the press until the next
- * block or until a heading singles a column out instead — the two are the one marker, so starting
- * a block takes a singled-out column off outright.
- *
- * No panel opens while the press is down. A block reaching more than one avg cell, or more than
- * one of a member's resource cells, says what they come to (`blockPanel`), left up to be read once
- * the pointer comes up; any other block is the outline alone, and Ctrl+C is what reads it.
- *
- * A block already up is taken off by a plain click anywhere in the log, which does nothing else:
- * the cell it lands on is picked up only by a press that is held or dragged (`arming`), so the
- * click that clears the table does not open a panel or lay a new block down in the same stroke.
- *
- * Rows are re-read on every press rather than kept, since a group opening or a field summary
- * swapping changes which cells are on screen, and only those are picked up or added in.
- */
+/** Pick a block of log cells with the table's gestures (cellpick.ts): a click or tap opens the cell's
+ *  panel, a hold or drag is a block, whose sum (`blockPanel`) stands once the press lets go. */
 function wireCellSelect(root: HTMLElement): void {
   clearBlock();
   holding = false;
   const grid = root.querySelector<HTMLElement>(".gridwrap .grid");
   if (!grid) return;
+  /** When the mouse's press went down: a click or a hold. */
+  let pressedAt = 0;
+  /** The press went down on the cell whose panel stood: its click only closes it. */
+  let closing = false;
 
-  /** A press made while a block already stood, waiting to find out which it is: held or dragged it
-   *  picks its own cell up, let go of it was the click that took the old block off and no more. */
-  let arming: { begin: () => void; timer: ReturnType<typeof setTimeout>; x: number; y: number } | null = null;
-  const HELD_AT = 250, MOVED_AT = 3;
-
-  /** Keep the click the press is about to end on from opening the cell's own panel: a reach across
-   *  the table, and the press that takes a block off, are presses on the log rather than clicks on
-   *  the one cell they happen to have landed on. `keepDefault` leaves the row itself to do what
-   *  the click would have done anyway — a group under the press still opens or closes, which the
-   *  reader taking a block off has no reason to be denied. A reach across the table is denied it:
-   *  the group it set out from would open out from under the block just drawn. */
-  const swallowClick = (keepDefault: boolean): void => {
-    const swallow = (e: Event): void => {
-      if (!keepDefault) e.preventDefault();
-      e.stopPropagation();
-    };
-    addEventListener("click", swallow, { capture: true, once: true });
-    setTimeout(() => removeEventListener("click", swallow, true), 0);
-  };
-
-  const end = (): void => {
-    flushTrack();
-    if (arming) {
-      clearTimeout(arming.timer);
-      arming = null;
-      holdPanels(false);
-      swallowClick(true);
-      return;
-    }
-    if (!holding) return;
-    holding = false;
-    holdPanels(false);
-    const sel = cellSel!;
-    if (sel.r0 === sel.r1 && sel.c0 === sel.c1) {
-      dropPanel();
-      return;
-    }
-    swallowClick(false);
-  };
-
-  grid.addEventListener("pointerdown", (e) => {
-    const cell = (e.target as HTMLElement).closest<HTMLElement>(".r:not(.head) > .c");
-    if (e.button !== 0 || holding || arming || !cell) return;
-    // a cut's tag box is a panel of its own, not the start of a block: left uncaptured, its click
-    // lands on the tag rather than the cell
-    if ((e.target as HTMLElement).closest(".ctag")) return;
+  /** The log's rows and columns as a press finds them (a group may have opened), and its cell among them. */
+  const measure = (cell: HTMLElement): CellAt | null => {
     const g = rect(grid);
     const cols = [...grid.querySelectorAll<HTMLElement>(":scope > .r.head > .c[data-col]")]
       .map((h, nth) => {
@@ -800,51 +845,75 @@ function wireCellSelect(root: HTMLElement): void {
       })
       .sort((a, b) => a.left - b.left);
     const row = cell.closest<HTMLElement>(".r")!;
-    const rows = [...grid.querySelectorAll<HTMLElement>(".r")]
-      .filter((r) => !r.classList.contains("head") && r.offsetParent);
+    // the heading leads the rows: a press there lifts its column, but a block can be dragged up into it
+    const rows = [...grid.querySelectorAll<HTMLElement>(".r")].filter((r) => r.offsetParent);
     const ar = rows.indexOf(row);
     const ac = cols.findIndex((c) => c.nth === [...row.children].indexOf(cell));
-    if (ar < 0 || ac < 0) return;
+    return ar < 0 || ac < 0 ? null : { rows, cols, ar, ac };
+  };
 
-    e.preventDefault();
-    cell.setPointerCapture(e.pointerId);
+  /** Pick the one cell `at` names, putting down any block or singled-out column. */
+  const pick = (at: CellAt, touch: boolean): void => {
     dropPanel();
-    holdPanels(true);
-    // the block and a singled-out column are the one marker: taking this one takes that one off
     selected = null;
     selBox?.remove();
     selBox = null;
+    clearBlock();
+    cellSel = { grid, ...at, span: [], fr: at.ar, r0: at.ar, r1: at.ar, c0: at.ac, c1: at.ac, touch };
+    aimBlock(cellSel, at.ar, at.ac, rect(grid).top);
+  };
+
+  const end = (): void => {
+    flushTrack();
+    if (!holding) return;
+    holding = false;
+    holdPanels(false);
+    const sel = cellSel!;
+    const one = sel.r0 === sel.r1 && sel.c0 === sel.c1;
+    // a quick press that stayed on its cell was a click: it opens the cell's panel
+    if (one && performance.now() - pressedAt < HOLD) {
+      dropPanel();
+      if (closing) swallowClick();
+      return;
+    }
+    // a hold or a drag: its click would open a panel over the sum, or the group it set out from
+    if (one) dropPanel();
+    swallowClick();
+  };
+
+  grid.addEventListener("pointerdown", (e) => {
+    const target = e.target as HTMLElement;
+    const cell = target.closest<HTMLElement>(".r:not(.head) > .c");
+    // a cut's tag box is a panel of its own, not the start of a block: left uncaptured, its click
+    // lands on the tag rather than the cell
+    if (e.button !== 0 || holding || !cell || target.closest(".ctag, .celldot")) return;
+    const at = measure(cell);
+    if (!at) return;
+    closing = panelOpenOn(cell);
+    if (e.pointerType === "touch") {
+      const tap = (): void => {
+        pick(at, true);
+        // a tap's click comes after the finger lifts, so it is waited for as a long press's is
+        if (closing) swallowClick(600);
+      };
+      watchTouch(e, cell, tap, () => pick(at, true));
+      return;
+    }
+    e.preventDefault();
+    cell.setPointerCapture(e.pointerId);
+    holdPanels(true);
     pressScale = zoom();
     px = e.clientX / pressScale;
     py = e.clientY / pressScale;
-
-    const begin = (): void => {
-      arming = null;
-      holding = true;
-      cellSel = { grid, rows, span: [], cols, ar, ac, fr: ar, r0: ar, r1: ar, c0: ac, c1: ac };
-      aimBlock(cellSel, ar, ac, rect(grid).top);
-    };
-    // a block already up is put down by this press before anything else, and the press has to
-    // stay down to pick a new one up in its place — a plain click on the log is how the reader
-    // takes a block off, and it would be no use if it laid another straight back down
-    if (!cellSel) {
-      begin();
-      return;
-    }
-    clearBlock();
-    arming = { begin, timer: setTimeout(begin, HELD_AT), x: px, y: py };
+    pressedAt = performance.now();
+    pick(at, false);
+    holding = true;
   });
 
   grid.addEventListener("pointermove", (e) => {
-    if (!holding && !arming) return;
+    if (!holding || e.pointerType === "touch") return;
     px = e.clientX / pressScale;
     py = e.clientY / pressScale;
-    if (arming) {
-      // a drag is as good as a hold: it is plainly a reach across the table, not a click
-      if (Math.abs(px - arming.x) < MOVED_AT && Math.abs(py - arming.y) < MOVED_AT) return;
-      clearTimeout(arming.timer);
-      arming.begin();
-    }
     queueTrack();
   });
 

@@ -47,6 +47,7 @@ export const PORTRAITS: Readonly<Record<string, string>> = {
   "Verina": "97e6d54bc983adc9.webp",
   "Xiangli Yao": "9b0a33480e7b8209.webp",
   "Xuanling": "28c5d88fe54d342f.webp",
+  "Yangyang": "4444fb3329778c98.webp",
   "Yinlin": "08e4fa09c618158e.webp",
   "Zani": "7c347eaa3f6ca619.webp",
   "Zhezhi": "2f33e76d65a7c73f.webp"

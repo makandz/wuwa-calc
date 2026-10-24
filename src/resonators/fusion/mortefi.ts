@@ -8,18 +8,16 @@
  * Numbers from nanoka.cc (character 1204, https://ww.nanoka.cc/character/1204), cross-checked
  * against the migrated (old-engine) sheet's own totals.
  */
-import { Tier, Stat, Attribute, WeaponType, Type, Subtype, Cast, Node, Scaling, BuffTarget } from "../../engine/stats.js";
+import { Tier, Stat, Attribute, WeaponType, Type, Subtype, Cast, Node, Scaling, BuffTarget, Position } from "../../engine/stats.js";
 import { Buff, Talent, Inherent, Sequence, Resonator, Loadout, EchoLoadout } from "../../engine/gear.js";
 import {
   applyCurrent,
   applyTeam,
   revokeTeam,
   stacksOfTeam,
-  
   removeStackTeam,
-  isHeld,
   casting,
-  currentAction,
+  currentCast,
   onAction,
   runningAction,
   frozenStacks,
@@ -28,17 +26,20 @@ import {
   revokeCurrent,
   queue,
   queueOn,
-  queueOutro,
+  queueQTE,
   elapsed,
-  addToCast,
+  addGain,
 } from "../../engine/context.js";
-import { ActionGroup, Action, Rotation, ECHO, ActionField, INTRO } from "../../engine/rotation.js";
+import { ActionGroup, Action, Rotation, ActionField, DODGE } from "../../engine/rotation.js";
 import { STATIC_MIST, CADENZA, NEW_STD_PISTOL } from "../../weapons/standard.js";
-import { HERON, STONEWALL_BRACER, MOONLIT_CLOUDS_5PC } from "../../echoes/jinzhou.js";
-import { EMPYREAN_ANTHEM_5PC, HECATE } from "../../echoes/rinascita.js";
+import { HERON, STONEWALL_BRACER, MOONLIT_CLOUDS_5PC, ACTION_HERON, ACTION_STONEWALL_BRACER_1 } from "../../echoes/jinzhou.js";
+import { JINGRAN_RESONATOR } from "./jingran.js";
+import { EMPYREAN_ANTHEM_5PC, HECATE, ACTION_HECATE } from "../../echoes/rinascita.js";
 import { mainstatOptions, Mainstat } from "../../shared/mainstats.js";
+import { Echoes } from "../../shared/echoes.js";
 import { substats, highSubs, Substat } from "../../shared/substats.js";
 import { THE_LAST_DANCE } from "../../weapons/pistol.js";
+import { THUNDERBOLT, SOLAR_FLAME } from "../../weapons/battlepass.js";
 
 /* ----------------------------------------------------------------------------------- actions */
 
@@ -48,13 +49,13 @@ function mortefiAction(id: string, def: object): Action {
 
 // --- basics, mid-air, dodge counter, heavy (Impromptu Show) — BA2/BA4 fold multiple hits into
 //     one action, same as their own mv already did
-const BA1 = mortefiAction("Basic - Impromptu Show 1", { animFrames: 21, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 12, mv: 4830, energy: 86, concerto: 277, offtune: 2800, forte1: 5 }]});
-const BA2 = mortefiAction("Basic - Impromptu Show 2", { animFrames: 35, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA1 = mortefiAction("Basic - Impromptu Show 1", { animFrames: 21, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 12, mv: 4830, energy: 86, concerto: 277, offtune: 2800, forte1: 5 }]});
+const BA2 = mortefiAction("Basic - Impromptu Show 2", { chains: [BA1], animFrames: 35, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 10, mv: 4078, energy: 73, concerto: 234, offtune: 2360, forte1: 5 },
     { hitFrame: 18, mv: 4078, energy: 73, concerto: 234, offtune: 2360, forte1: 5 },
   ]});
-const BA3 = mortefiAction("Basic - Impromptu Show 3", { animFrames: 40, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 24, mv: 10730, energy: 192, concerto: 616, offtune: 6160, forte1: 10 }]});
-const BA4 = mortefiAction("Basic - Impromptu Show 4", { animFrames: 91, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
+const BA3 = mortefiAction("Basic - Impromptu Show 3", { chains: [BA2], animFrames: 40, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 24, mv: 10730, energy: 192, concerto: 616, offtune: 6160, forte1: 10 }]});
+const BA4 = mortefiAction("Basic - Impromptu Show 4", { chains: [BA3], animFrames: 91, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [
     { hitFrame: 18, mv: 2102, energy: 37, concerto: 120, offtune: 1200, forte1: 2 },
     { hitFrame: 24, mv: 2102, energy: 37, concerto: 120, offtune: 1200, forte1: 2 },
     { hitFrame: 30, mv: 2102, energy: 37, concerto: 120, offtune: 1200, forte1: 2 },
@@ -62,28 +63,29 @@ const BA4 = mortefiAction("Basic - Impromptu Show 4", { animFrames: 91, node: No
     { hitFrame: 54, mv: 12693, energy: 228, concerto: 729, offtune: 7280, forte1: 17 },
   ]});
 
-const HA = mortefiAction("Heavy - Impromptu Show", { node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 16701, energy: 240, concerto: 768, offtune: 9600 }] });
-const MA1 = mortefiAction("Mid-air - Impromptu Show 1", { animFrames: 11, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 2325, energy: 41, concerto: 100, offtune: 1360, forte1: 2 }]});
-const MA2 = mortefiAction("Mid-air - Impromptu Show 2", { animFrames: 11, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 2325, energy: 41, concerto: 100, offtune: 1360, forte1: 2 }]});
-const DC = mortefiAction("Dodge Counter - Impromptu Show", { animFrames: 48, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [{ hitFrame: 32, mv: 19498, energy: 350, concerto: 640, offtune: 6400, forte1: 20 }], castConcerto: 1000});
+const HA = mortefiAction("Heavy - Impromptu Show", { castPriority: 2, node: Node.Normal, cast: Cast.Heavy, type: Type.Heavy, bullets: [{ hitFrame: 0, mv: 16701, energy: 240, concerto: 768, offtune: 9600 }] });
+const MA1 = mortefiAction("Mid-air - Impromptu Show 1", { castPosition: Position.Midair, animFrames: 11, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 2325, energy: 41, concerto: 100, offtune: 1360, forte1: 2 }]});
+const MA2 = mortefiAction("Mid-air - Impromptu Show 2", { chains: [MA1], castPosition: Position.Midair, animFrames: 11, castPriority: 2, node: Node.Normal, cast: Cast.Basic, type: Type.Basic, bullets: [{ hitFrame: 0, mv: 2325, energy: 41, concerto: 100, offtune: 1360, forte1: 2 }]});
+const DC = mortefiAction("Dodge Counter - Impromptu Show", { chains: [DODGE], animFrames: 48, animPriority: { 7: 2 }, castPriority: 8, node: Node.Normal, cast: Cast.DodgeCounter, type: Type.Basic, bullets: [{ hitFrame: 32, mv: 19498, energy: 350, concerto: 640, offtune: 6400, forte1: 20 }], castConcerto: 1000});
 
 // --- resonance skill: Passionate Variation. Elemental DMG reads 0, so concerto is the flat
 //     Concerto Regen (18) instead, same treatment as every other such row.
+// replaced by Fury Fugue once Annoyance reaches 100
 const Skill = mortefiAction("Skill - Passionate Variation", {
-  animFrames: 46, cooldown: 60 * 14,
+  maxForte1: 99, animFrames: 46, animPriority: { 22: 3 }, castPriority: 4, cooldown: 60 * 14,
   node: Node.Skill, cast: Cast.Skill, type: Type.Skill, bullets: [{ hitFrame: 16, mv: 20876, energy: 1000, offtune: 7200, forte1: 40 }], castConcerto: 1800,
   updateBuffs: () => applyCurrent(PASSIONATE_TAIL, 1),
 });
 
 // --- forte circuit: Fury Fugue — spends every point of Annoyance, considered Resonance Skill DMG
-const FSkill = mortefiAction("Forte Skill - Fury Fugue", { minForte1: 100, animFrames: 67, node: Node.Forte, cast: Cast.Skill, type: Type.Skill, bullets: [{ hitFrame: 20, mv: 32605, energy: 1000, offtune: 8000 }], castConcerto: 1800, castForte1: -100});
+const FSkill = mortefiAction("Forte Skill - Fury Fugue", { minForte1: 100, animFrames: 67, animPriority: { 41: 3 }, castPriority: 4, node: Node.Forte, cast: Cast.Skill, type: Type.Skill, bullets: [{ hitFrame: 20, mv: 32605, energy: 1000, offtune: 8000 }], castConcerto: 1800, castForte1: -100});
 
 // --- resonance liberation: Violent Finale opens Burning Rhapsody — 28 coordinated attacks banked
 //     (10s / 0.35s), the window itself and its firing rules in BURNING_RHAPSODY below. A fresh
 //     window is a fresh Rhythmic Vibrato ramp, so the old one is wiped here.
 const Liberation = mortefiAction("Liberation - Violent Finale", {
-  animFrames: 120, timestop: 120, motionStop: 64, cooldown: 60 * 20,
-  node: Node.Liberation, cast: Cast.Liberation, type: Type.Liberation, bullets: [{ hitFrame: 62, mv: 15905, offtune: 96000 }], castConcerto: 2000, resetEnergy: true,
+  animFrames: 120, castPriority: 10, timestop: [0, 120], motionStop: [0, 64], cooldown: 60 * 20,
+  node: Node.Liberation, cast: Cast.Liberation, type: Type.Liberation, bullets: [{ hitFrame: 62, mv: 15905, offtune: 96000 }], castConcerto: 2000, castEnergy: -12500,
   updateBuffs: () => { revokeCurrent(VIBRATO); applyTeam(BURNING_RHAPSODY, 28); },
 });
 /** Burning Rhapsody as the report reads it: the field his Liberation puts out, which every
@@ -107,11 +109,11 @@ const ACTION_S5_MARCATO = mortefiAction("Liberation - Marcato (S5 Funerary Quart
 });
 
 // --- intro / outro
-const Intro = mortefiAction("Intro - Dissonance", { animFrames: 90, prioFrames: 90, motionStop: 46, node: Node.Intro, cast: Cast.Intro, type: Type.Intro, bullets: [{ hitFrame: 44, mv: 16899, energy: 1000, offtune: 8000, forte1: 60 }], castConcerto: 1000});
+const Intro = mortefiAction("Intro - Dissonance", { endPosition: Position.Grounded, qteFrames: 50, animFrames: 90, noSwapFrames: 90, castPriority: 11, motionStop: [4, 49], node: Node.Intro, cast: Cast.Intro, type: Type.Intro, bullets: [{ hitFrame: 44, mv: 16899, energy: 1000, offtune: 8000, forte1: 60 }], castConcerto: 1000});
 const Outro = mortefiAction("Outro - Rage Transposition", {
   animFrames: 0,
   cast: Cast.Outro, minConcerto: 10000, castConcerto: -10000,
-  updateBuffs: () => queueOutro(MORTEFI_OUTRO),
+  updateBuffs: () => queueQTE(MORTEFI_OUTRO),
 });
 
 /* ------------------------------------------------------------------------------------ buffs */
@@ -121,13 +123,9 @@ const Outro = mortefiAction("Outro - Rage Transposition", {
 const PASSIONATE_TAIL = new Buff({
   name: "Mortefi: Passionate Variation",
   duration: 60 * 5,
-  applyStats: () => {
-    const a = currentAction();
-    if (!casting(Cast.Basic) || !a.bullets.length) return;
-    // 7 a shot: the second press is two shots and the fourth five, which is what carries a whole
-    // combo to 100 Annoyance
-    addStat(Stat.AddForte1, 7);
-  },
+  // 7 a shot: the second press is two shots and the fourth five, which is what carries a whole
+  // combo to 100 Annoyance
+  updateDebuffs: () => { if (casting(Cast.Basic)) addGain({ forte1: 7 }); },
 });
 
 /** Burning Rhapsody: its 10s (17s with S4), and each stack one 0.35s coordinated-attack slot,
@@ -147,7 +145,7 @@ const BURNING_RHAPSODY = new Buff({
     if (!elapsed()) return;
     const heavy = casting(Cast.Heavy);
     // the cast carries no motion value of its own: the press it was cast from does
-    const press = currentAction().formOf ?? currentAction();
+    const press = currentCast();
     if (!heavy && !(casting(Cast.Basic) && press.bullets.length > 0)) return;
     const n = Math.min(3, stacksOfTeam(BURNING_RHAPSODY));
     for (let i = 0; i < n; i++) {
@@ -225,7 +223,7 @@ const MORTEFI_S1 = new Sequence({
  *  ICD simplification. */
 const MORTEFI_S2 = new Sequence({
   name: "Mortefi S2: Hypocritical Hymn",
-  updateBuffs: () => { if (casting(Cast.Echo)) addToCast({ energy: 1000 }); },
+  updateBuffs: () => { if (casting(Cast.Echo)) addGain({ energy: 1000 }); },
 });
 
 /** S3 Flaming Recitativo: +30% Crit DMG on Marcato hits, scoped to `Subtype.Coordinated` (covers
@@ -262,12 +260,13 @@ const MORTEFI_S6 = new Sequence({
 // as every other resonator's own
 const MORTEFI_TALENTS = new Talent({
   name: "Mortefi: Talents",
-  stats: [[Stat.BonusAtk, 12], [Stat.DmgBonus, 12, Attribute.Fusion]],
+  stats: [[Stat.BonusAtk, 11.9999997], [Stat.DmgBonus, 12, Attribute.Fusion]],
 });
 
 /** Him, as a Resonator: name/element/weapon, every grant/spend/queue rule his kit needs, and his
  *  own base stat line. `Tier.Free` — see the file header. */
 const MORTEFI_RESONATOR = new Resonator({
+  id: 1204,
   name: "Mortefi",
   talent: MORTEFI_TALENTS,
   inherent1: MO_INHERENT_1,
@@ -276,6 +275,8 @@ const MORTEFI_RESONATOR = new Resonator({
   weapon: WeaponType.Pistols,
   color: "#d7370f",
   intro: Intro,
+  swapIn: BA1,
+  swapInAir: MA1,
   maxEnergy: 12500,
   maxForte1: 100,
   tier: Tier.Free,
@@ -290,11 +291,11 @@ const MORTEFI_RESONATOR = new Resonator({
 const BA1234 = new ActionGroup("Basic - Impromptu Show 1234", [BA1, BA2, BA3, BA4]);
 
 const MO_ROTATION = new Rotation([
-  INTRO, Skill, FSkill,
+  Intro, Skill, FSkill,
   BA1234.cancel(),
   FSkill.cancel(),
   Liberation,
-  ECHO.instaSwap(), Outro,
+  ACTION_HERON.instaSwap(), ACTION_STONEWALL_BRACER_1.instaSwap(), ACTION_HECATE.instaSwap(), Outro,
 ]);
 
 /* ----------------------------------------------------------------------------------- loadout */
@@ -302,16 +303,20 @@ const MO_ROTATION = new Rotation([
 // his real 5pc Moonlit Clouds + Impermanence Heron build, Static Mist signature-adjacent standard
 // weapon, all six sequence nodes (Tier.Free — see file header)
 export const MORTEFI = new Loadout({
+  id: 12041,
   resonator: MORTEFI_RESONATOR,
-  weapons: [STATIC_MIST, CADENZA, NEW_STD_PISTOL, THE_LAST_DANCE],
-  echoLoadouts: [
+  weapons: [STATIC_MIST, CADENZA, NEW_STD_PISTOL, THE_LAST_DANCE, THUNDERBOLT, SOLAR_FLAME],
+  echoes: new Echoes({
+    sets: [
     new EchoLoadout(HERON, MOONLIT_CLOUDS_5PC),
-    new EchoLoadout(STONEWALL_BRACER, MOONLIT_CLOUDS_5PC),
+    // worn for the shield, which Jingran's Trace the Vestige feeds on
+    new EchoLoadout(STONEWALL_BRACER, MOONLIT_CLOUDS_5PC).requires(JINGRAN_RESONATOR),
     new EchoLoadout(HECATE, EMPYREAN_ANTHEM_5PC),
   ],
-  mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Fusion3, Mainstat.ATK1),
-  substat: substats(Substat.CritDmg, Substat.CritRate, Substat.AtkPct, Substat.Basic, Substat.FlatAtk, Substat.Liberation),
-  highSubstat: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Basic, Substat.FlatAtk, Substat.Liberation),
+    mainstats: mainstatOptions(Mainstat.CR4, Mainstat.CD4, Mainstat.ATK3, Mainstat.Fusion3, Mainstat.ATK1),
+    substats: substats(Substat.CritDmg, Substat.CritRate, Substat.AtkPct, Substat.Basic, Substat.FlatAtk, Substat.Liberation),
+    highSubstats: highSubs(Substat.CritRate, Substat.CritDmg, Substat.AtkPct, Substat.Basic, Substat.FlatAtk, Substat.Liberation, Substat.Skill),
+  }),
     rotation: MO_ROTATION,
   sequences: [MORTEFI_S1, MORTEFI_S2, MORTEFI_S3, MORTEFI_S4, MORTEFI_S5, MORTEFI_S6],
 });

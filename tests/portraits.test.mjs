@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { ALL_TEAMS } from "../dist/src/teams.js";
+import { ALL_TEAMS } from "../dist/src/resonators/teams.js";
 import { PORTRAITS } from "../dist/src/page/portrait-assets.js";
 import { PORTRAIT_CACHE, portrait, portraitSource } from "../dist/src/page/portraits.js";
 
@@ -17,8 +17,13 @@ function mockCache(t, cache) {
   });
 }
 
-test("every team character has a valid content-hashed local WebP", async () => {
+test("every available team portrait is a valid content-hashed local WebP", async () => {
   for (const name of new Set(ALL_TEAMS.flatMap((team) => team.loadouts.map((l) => l.resonator.name)))) {
+    // Lily is present upstream before Encore publishes her portrait.
+    if (name === "Lily") {
+      assert.equal(portrait(name), "");
+      continue;
+    }
     assert.ok(PORTRAITS[name], `Missing portrait: ${name}`);
   }
   for (const filename of new Set(Object.values(PORTRAITS))) {

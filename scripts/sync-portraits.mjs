@@ -9,15 +9,18 @@ if (!response.ok) throw new Error(`Character API: ${response.status}`);
 const { roleList } = await response.json();
 const roverIcon = roleList.find((entry) => entry.Id === 1501)?.RoleHeadIcon;
 const names = new Set();
-for (const element of await readdir(new URL("src/resonators/", root))) {
-  const directory = new URL(`src/resonators/${element}/`, root);
+for (const element of await readdir(new URL("src/resonators/", root), { withFileTypes: true })) {
+  if (!element.isDirectory()) continue;
+  const directory = new URL(`src/resonators/${element.name}/`, root);
   for (const file of await readdir(directory)) {
     if (!file.endsWith(".ts")) continue;
     const source = await readFile(new URL(file, directory), "utf8");
-    const match = /new Resonator\(\{\s*name:\s*"([^"]+)"/.exec(source);
+    const match = /new Resonator\(\{\s*(?:id:\s*\d+,\s*)?name:\s*"([^"]+)"/.exec(source);
     if (match) names.add(match[1]);
   }
 }
+
+if (!names.size) throw new Error("No resonators found");
 
 const portraits = {};
 const downloaded = new Map();
@@ -28,6 +31,11 @@ for (const name of [...names].sort()) {
     : name.endsWith(" Rover") ? `Rover: ${name.slice(0, -6)}` : name;
   const role = roleList.find((entry) => entry.Name === apiName
     && (!name.endsWith(" Rover") || entry.RoleHeadIcon === roverIcon));
+  // Upstream includes Lily before Encore publishes her portrait.
+  if (!role?.RoleHeadIcon && name === "Lily") {
+    console.warn("Skipping Lily: Encore has no portrait yet");
+    continue;
+  }
   if (!role?.RoleHeadIcon) throw new Error(`No portrait for ${name}`);
   let filename = downloaded.get(role.RoleHeadIcon);
   if (!filename) {

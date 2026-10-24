@@ -5,22 +5,24 @@
  *   page/panels.ts  hover-panel markup and wiring
  *   page/table.ts   the comparison page and its handlers
  *   page/detail.ts  the detail page, action log and column drag
- *   solver.ts       the build search (also the Worker entry); teamrun.ts the engine run it scores
+ *   solve/solver.ts  the build search (also the Worker entry); solve/teamrun.ts the engine run it scores
  */
 import { fmt } from "./display.js";
-import { hasBuild, solveTeam, bestKey, picksKey, isProgress } from "./solver.js";
-import type { Member, Solved, SolveRequest, SolveResponse, SolveProgress, Filters, Pick } from "./solver.js";
-import { runTeam } from "./teamrun.js";
+import { hasBuild, solveTeam, bestKey, picksKey, isProgress } from "../solve/solver.js";
+import type { Member, Solved, SolveRequest, SolveResponse, SolveProgress, Filters, Pick } from "../solve/solver.js";
+import { runTeam } from "../solve/teamrun.js";
 import {
   TEAMS, filters, results, bestPicks, picksCache, storeSolved, teamWanted, teamRows, estimatedRowCount, rowFromKey,
   setVisibleRows, visibleRows, discardRestoredSolves, loadShipped, loadSolves, saveSolves, solveFits,
-  applyHash, syncHash, routeTeam, hashTeam,
-} from "./page/model.js";
-import type { TeamRow } from "./page/model.js";
-import { wireSourcePanels } from "./page/panels.js";
-import { renderComparison, onRefresh } from "./page/table.js";
-import { renderDetail } from "./page/detail.js";
-import { maybeShowTutorial } from "./page/tutorial.js";
+  applyHash, syncHash, routeTeam, hashTeam, solvedRows, admitBuild, reopenDetail, tagTeam, gearShut,
+} from "./model.js";
+import type { TeamRow } from "./model.js";
+import { wireSourcePanels } from "./panels.js";
+import { renderComparison, onRefresh } from "./table.js";
+import { renderDetail } from "./detail.js";
+import { onSwitch, onSolve } from "./pickmenu.js";
+import type { Attempt } from "./pickmenu.js";
+import { maybeShowTutorial } from "./tutorial.js";
 
 const app = document.getElementById("app")!;
 const backLink = document.getElementById("backLink")!;
@@ -48,8 +50,8 @@ function overlayPhase(text: string, now = false): void {
  *  phase that blocks the thread on the next line never gives the 100ms timer a frame to fire in —
  *  which is why a long render used to run behind a page that simply froze. `rows` is how much work
  *  is coming: a redraw small enough to be over before the overlay would have shown keeps the
- *  delayed form and doesn't flash. */
-const OVERLAY_ROWS = 200;
+ *  delayed form and doesn't flash — a render ran ~60ms at 700 rows (Oct 2026), so ~1000 is 100ms. */
+const OVERLAY_ROWS = 1_000;
 async function overlayNow(text: string, rows = Infinity): Promise<void> {
   overlayPhase(text, rows >= OVERLAY_ROWS);
   await paint();
@@ -149,8 +151,8 @@ function workerPool(): Worker[] | null {
   poolTried = true;
   const want = Math.max(1, Math.min(WORKER_LIMIT, (navigator.hardwareConcurrency || 4) - 1));
   try {
-    // a query string nothing has cached: the published site caches for ten minutes, and a worker
-    // on last build's engine solves with last build's kits
+    // ./solver.js is the bundled sibling; the query string dodges the site's ten-minute cache, so
+    // no worker solves on last build's kits
     pool = Array.from({ length: want }, () =>
       new Worker(new URL(`./solver.js?v=${Date.now()}`, import.meta.url), { type: "module" }));
     for (const w of pool) listen(w);
@@ -300,6 +302,8 @@ async function ensureBestPicks(inPlay: [string, Member[]][], f: Filters, stale: 
 let generation = 0;
 /** Whether the table's rows have been asked for yet — a `#team=` cold load never asks. */
 let tableRequested = false;
+/** Whether the filters moved under a detail page since the table's rows were expanded. */
+let tableStale = false;
 
 const route = (): void => {
   const key = routeTeam();
@@ -309,7 +313,10 @@ const route = (): void => {
     maybeShowTutorial();
     return;
   }
-  if (!tableRequested) { void refresh(); return; }
+  if (!tableRequested || tableStale) {
+    void refresh();
+    return;
+  }
   renderComparison();
   // measured off the table it points at, so it goes up once that table is on screen
   maybeShowTutorial();
@@ -322,6 +329,7 @@ const route = (): void => {
  */
 async function refresh(): Promise<void> {
   tableRequested = true;
+  tableStale = false;
   // a search made while one is still running takes over: the old pass's teams still in line are
   // dropped, and it stops at its next step — anything it already solved or ran is kept
   const gen = ++generation;
@@ -376,9 +384,62 @@ async function refresh(): Promise<void> {
   maybeShowTutorial();
 }
 
-/** A `#team=` load served off its key alone: one traced run, no table build. */
+/** A detail pick (pickmenu.ts): solve the one team under each try's filters in turn, open the first
+ *  row one names, and let the table catch up when next shown. `undo` puts the filters back if none. */
+async function switchTo(teamKey: string, attempts: Attempt[], undo: () => void): Promise<void> {
+  tableStale = true;
+  const gen = ++generation;
+  const stale = (): boolean => gen !== generation;
+  cancelQueued();
+  barReset();
+  try {
+    for (const attempt of attempts) {
+      if (!attempt.setUp()) continue;
+      await ensureBestPicks([[teamKey, TEAMS[teamKey]!]], structuredClone(filters), stale);
+      if (stale()) return;
+      saveSolves();
+      const row = attempt.choose(solvedRows(teamKey));
+      if (!row) continue;
+      // a teammate re-picked past the guess the pick was costed on can still trip a filter
+      admitBuild(row.members, row.combo);
+      await overlayNow("Running Rotation…", 1);
+      if (stale()) return;
+      reopenDetail(row.key);
+      route();
+      overlayHide();
+      return;
+    }
+  } catch (err) {
+    if (!stale()) showError(err);
+    return;
+  }
+  undo();
+  overlayHide();
+}
+
+/** One team solved under `f` with no overlay and no redraw — what an open pick menu reads its Compare
+ *  figures off (pickmenu.ts). */
+async function solveQuiet(teamKey: string, f: Filters): Promise<void> {
+  const members = TEAMS[teamKey]!;
+  await loadShipped(f);
+  if (bestPicks.has(bestKey(teamKey, members, f)) || !members.every((m) => hasBuild(m, f))) return;
+  workerPool();
+  await solveAll([[teamKey, members]], f, () => {});
+  saveSolves();
+}
+
+/** A `#team=` load served off its key alone: one traced run, no table build. A team code leaving gear
+ *  to the solver reads back once that one team is solved with its gear compares shut. */
 async function bootDetail(): Promise<boolean> {
-  const key = hashTeam();
+  let key = hashTeam();
+  const pending = key && !rowFromKey(key) ? tagTeam(key) : null;
+  if (pending) {
+    overlayPhase("Solving Team…", true);
+    await paint();
+    await solveQuiet(pending, gearShut(filters));
+    key = hashTeam();
+    if (key && !rowFromKey(key)) overlayHide();
+  }
   if (!key || results.has(key)) return false;
   const row = rowFromKey(key);
   if (!row) return false;
@@ -392,6 +453,8 @@ async function bootDetail(): Promise<boolean> {
 
 async function boot(): Promise<void> {
   onRefresh(refresh);
+  onSwitch(switchTo);
+  onSolve(solveQuiet);
   applyHash();
   await loadSolves();
   const detail = await bootDetail().catch((err: unknown) => {
@@ -410,7 +473,17 @@ async function boot(): Promise<void> {
   addEventListener("hashchange", () => {
     if (applyHash()) { void refresh(); return; }
     const key = hashTeam();
-    if (key && !results.has(key) && rowFromKey(key)) { void bootDetail(); return; }
+    if (key && !results.has(key) && (rowFromKey(key) || tagTeam(key))) {
+      // a code that still names no row once its team is solved comes back off the URL
+      // ...and one that opens is written back as it reads, a gear part that didn't read gone
+      void bootDetail().then((shown) => {
+        syncHash();
+        if (!shown) route();
+      });
+      return;
+    }
+    // ...as does one that names nothing at all, and any other is written back as it reads
+    syncHash();
     route();
   });
   wireSourcePanels(app);

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ALL_TEAMS, PRIMARY_TEAM, INTERCHANGEABLE, primaryTeamsWhere } from "../dist/src/teams.js";
+import { ALL_TEAMS, PRIMARY_TEAM, INTERCHANGEABLE, primaryTeamsWhere } from "../dist/src/resonators/teams.js";
+import { ENCORE } from "../dist/src/resonators/fusion/encore.js";
 import { TEAMS, teamWanted, resonatorFilters } from "../dist/src/page/model.js";
 import { OWNED_LIMITED_CHARACTERS, ownsCharacter, ownership, teamOwned } from "../dist/src/ownership.js";
 
-const roster = new Map(ALL_TEAMS.flatMap((t) => t.loadouts).map((l) => [l.resonator.name, l.resonator]));
+const roster = new Map([...ALL_TEAMS.flatMap((t) => t.loadouts), ENCORE].map((l) => [l.resonator.name, l.resonator]));
 const wanted = () => Object.entries(TEAMS).filter(([key, ms]) => teamWanted(key, ms));
 
 test("the supplied limited roster matches the app's names, with standards and free characters included", () => {

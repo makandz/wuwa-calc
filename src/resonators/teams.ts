@@ -5,58 +5,59 @@
  * a one-entry list. Position matters: slot 1 runs its opener. Workers are handed a team's index
  * into `ALL_TEAMS` (`teamKey`), which both threads build alike.
  */
-import type { Loadout } from "./engine/gear.js";
-import { teamPlayable } from "./engine/rotation.js";
-import { CARTETHYIA } from "./resonators/aero/cartethyia.js";
-import { CIACCONA } from "./resonators/aero/ciaccona.js";
-import { IUNO, IUNO_MDPS } from "./resonators/aero/iuno.js";
-import { JIANXIN } from "./resonators/aero/jianxin.js";
-import { JIYAN } from "./resonators/aero/jiyan.js";
-import { QINGXIAO } from "./resonators/aero/qingxiao.js";
-import { QIUYUAN, QIUYUAN_MDPS } from "./resonators/aero/qiuyuan.js";
-import { ROVER_AERO } from "./resonators/aero/rover_aero.js";
-import { SIGRIKA as SIGRIKA_EXTEND, SIGRIKA_FAST } from "./resonators/aero/sigrika.js";
-import { AUGUSTA } from "./resonators/electro/augusta.js";
-import { BULING } from "./resonators/electro/buling.js";
-import { HSIN_FLARE, HSIN_UNISON } from "./resonators/electro/hsin.js";
-import { REBECCA } from "./resonators/electro/rebecca.js";
-import { ROVER_ELECTRO, ROVER_ELECTRO_MDPS } from "./resonators/electro/rover_electro.js";
-import { SUOMING, SUOMING_MDPS, SUOMING_MDPS_DOUBLE } from "./resonators/electro/suoming.js";
-import { XIANGLI_YAO } from "./resonators/electro/xiangli_yao.js";
-import { YINLIN } from "./resonators/electro/yinlin.js";
-import { AEMEATH_BURST, AEMEATH_RUPTURE } from "./resonators/fusion/aemeath.js";
-import { BRANT, BRANT_MDPS } from "./resonators/fusion/brant.js";
-import { CHANGLI } from "./resonators/fusion/changli.js";
-import { DENIA_BURST, DENIA_STRAIN } from "./resonators/fusion/denia.js";
-import { ENCORE } from "./resonators/fusion/encore.js";
-import { GALBRENA } from "./resonators/fusion/galbrena.js";
-import { JINGRAN } from "./resonators/fusion/jingran.js";
-import { LUPA } from "./resonators/fusion/lupa.js";
-import { MORNYE } from "./resonators/fusion/mornye.js";
-import { MORTEFI } from "./resonators/fusion/mortefi.js";
-import { CARLOTTA, CARLOTTA_FAST } from "./resonators/glacio/carlotta.js";
-import { HIYUKI } from "./resonators/glacio/hiyuki.js";
-import { LUCILLA, LUCILLA_CHAFE } from "./resonators/glacio/lucilla.js";
-import { SANHUA } from "./resonators/glacio/sanhua.js";
-import { SUISUI } from "./resonators/glacio/suisui.js";
-import { ZHEZHI } from "./resonators/glacio/zhezhi.js";
-import { CAMELLYA_123_ALWAYS_OUTRO as CAMELLYA_123_ALWAYS, CAMELLYA_DOUBLE_123S6, CAMELLYA_DOUBLE_ALWAYS} from "./resonators/havoc/camellya.js";
-import { CANTARELLA, CANTARELLA_MDPS } from "./resonators/havoc/cantarella.js";
-import { CHISA } from "./resonators/havoc/chisa.js";
-import { DANJIN } from "./resonators/havoc/danjin.js";
-import { PHRO_12s, PHRO_10s } from "./resonators/havoc/phrolova.js";
-import { ROCCIA, ROCCIA_MDPS } from "./resonators/havoc/roccia.js";
-import { ROVER_HAVOC } from "./resonators/havoc/rover_havoc.js";
-import { XUANLING,  } from "./resonators/havoc/xuanling.js";
-import { JINHSI, JINHSI_FULL, JINHSI_SUPPORT } from "./resonators/spectro/jinhsi.js";
-import { LUCY } from "./resonators/spectro/lucy.js";
-import { LUUK, LUUK_16s } from "./resonators/spectro/luuk.js";
-import { LYNAE_RUPTURE, LYNAE_STRAIN } from "./resonators/spectro/lynae.js";
-import { PHOEBE_ABSOLUTION, PHOEBE_CONFESSION } from "./resonators/spectro/phoebe.js";
-import { ROVER_SPECTRO } from "./resonators/spectro/rover_spectro.js";
-import { SHOREKEEPER } from "./resonators/spectro/shorekeeper.js";
-import { VERINA } from "./resonators/spectro/verina.js";
-import { ZANI } from "./resonators/spectro/zani.js";
+import type { Loadout } from "../engine/gear.js";
+import { teamPlayable } from "../engine/rotation.js";
+import { CARTETHYIA } from "./aero/cartethyia.js";
+import { CIACCONA, CIACCONA_YELLOW } from "./aero/ciaccona.js";
+import { IUNO, IUNO_MDPS } from "./aero/iuno.js";
+import { JIANXIN } from "./aero/jianxin.js";
+import { JIYAN } from "./aero/jiyan.js";
+import { QINGXIAO } from "./aero/qingxiao.js";
+import { QIUYUAN, QIUYUAN_MDPS } from "./aero/qiuyuan.js";
+import { ROVER_AERO } from "./aero/rover_aero.js";
+import { YANGYANG } from "./aero/yangyang.js";
+import { SIGRIKA_DOUBLE, SIGRIKA_EBA, SIGRIKA_FAST } from "./aero/sigrika.js";
+import { AUGUSTA } from "./electro/augusta.js";
+import { BULING } from "./electro/buling.js";
+import { HSIN_FLARE, HSIN_UNISON } from "./electro/hsin.js";
+import { REBECCA } from "./electro/rebecca.js";
+import { ROVER_ELECTRO, ROVER_ELECTRO_MDPS } from "./electro/rover_electro.js";
+import { SUOMING, SUOMING_MDPS, SUOMING_MDPS_DOUBLE, SUOMING_MDPS_SIMPLE } from "./electro/suoming.js";
+import { XIANGLI_YAO } from "./electro/xiangli_yao.js";
+import { YINLIN } from "./electro/yinlin.js";
+import { AEMEATH_BURST, AEMEATH_RUPTURE } from "./fusion/aemeath.js";
+import { BRANT, BRANT_MDPS } from "./fusion/brant.js";
+import { CHANGLI } from "./fusion/changli.js";
+import { DENIA_BURST, DENIA_STRAIN } from "./fusion/denia.js";
+import { ENCORE } from "./fusion/encore.js";
+import { GALBRENA, GALBRENA_ECHO } from "./fusion/galbrena.js";
+import { JINGRAN } from "./fusion/jingran.js";
+import { LUPA } from "./fusion/lupa.js";
+import { MORNYE } from "./fusion/mornye.js";
+import { MORTEFI } from "./fusion/mortefi.js";
+import { CARLOTTA, CARLOTTA_FAST } from "./glacio/carlotta.js";
+import { HIYUKI } from "./glacio/hiyuki.js";
+import { LUCILLA, LUCILLA_CHAFE } from "./glacio/lucilla.js";
+import { SANHUA } from "./glacio/sanhua.js";
+import { SUISUI } from "./glacio/suisui.js";
+import { ZHEZHI } from "./glacio/zhezhi.js";
+import { CAMELLYA_123_ALWAYS_OUTRO as CAMELLYA_123_ALWAYS, CAMELLYA_DOUBLE_123S6, CAMELLYA_DOUBLE_ALWAYS} from "./havoc/camellya.js";
+import { CANTARELLA, CANTARELLA_MDPS } from "./havoc/cantarella.js";
+import { CHISA } from "./havoc/chisa.js";
+import { DANJIN } from "./havoc/danjin.js";
+import { PHRO_12s, PHRO_11s, PHRO_9s } from "./havoc/phrolova.js";
+import { ROCCIA, ROCCIA_MDPS } from "./havoc/roccia.js";
+import { XUANLING,  } from "./havoc/xuanling.js";
+import { JINHSI, JINHSI_FULL, JINHSI_SUPPORT } from "./spectro/jinhsi.js";
+import { LILY } from "./spectro/lily.js";
+import { LUCY } from "./spectro/lucy.js";
+import { LUUK, LUUK_16s } from "./spectro/luuk.js";
+import { LYNAE_RUPTURE, LYNAE_STRAIN } from "./spectro/lynae.js";
+import { PHOEBE_ABSOLUTION, PHOEBE_CONFESSION } from "./spectro/phoebe.js";
+import { ROVER_SPECTRO } from "./spectro/rover_spectro.js";
+import { SHOREKEEPER } from "./spectro/shorekeeper.js";
+import { VERINA } from "./spectro/verina.js";
+import { ZANI } from "./spectro/zani.js";
 
 /** One position in a team: the main DPS bare, or the list of loadouts a support position runs. */
 type Slot = Loadout | Loadout[];
@@ -66,7 +67,7 @@ type Slot = Loadout | Loadout[];
  *  until the group is opened up (page/model.ts's own `teamWanted()`). Which one is the slot list's
  *  own doing — whichever of them it names first is the one that runs, so a team leaning on Suisui
  *  or Mornye rather than Shorekeeper simply lists them in that order. */
-export const INTERCHANGEABLE = new Set<Loadout>([SHOREKEEPER, MORNYE, SUISUI, BULING, VERINA]);
+export const INTERCHANGEABLE = new Set<Loadout>([SHOREKEEPER, MORNYE, SUISUI, BULING, VERINA, LILY]);
 
 
 const TEAMS: Slot[][] = [
@@ -74,150 +75,217 @@ const TEAMS: Slot[][] = [
   // suoming mdps, electro basic unison
   [[SHOREKEEPER], [JINHSI_SUPPORT], SUOMING_MDPS],
   [[SHOREKEEPER, VERINA, MORNYE], [SANHUA], SUOMING_MDPS_DOUBLE],
+  [[LILY], [SANHUA], SUOMING_MDPS_DOUBLE],
   [[SHOREKEEPER, VERINA, MORNYE], [JINHSI_SUPPORT], SUOMING_MDPS],
+  [[LILY], [JINHSI_SUPPORT], SUOMING_MDPS],
   [[MORNYE, SHOREKEEPER, VERINA], [LYNAE_RUPTURE, REBECCA], SUOMING_MDPS],
+  [[LILY], [LYNAE_RUPTURE, REBECCA], SUOMING_MDPS],
 
   // hsin, Unison mode: Suoming or Jinhsi behind her hands over the Unison her Intro answers
   [[SHOREKEEPER, VERINA, MORNYE, SUISUI], [SUOMING], HSIN_UNISON],
+  [[LILY], [SUOMING], HSIN_UNISON],
   [[BULING], [SUOMING], HSIN_UNISON],
-  [[SUOMING], HSIN_UNISON, [JINHSI_SUPPORT]],
+  [[JINHSI_SUPPORT],[SUOMING], HSIN_UNISON, ],
 
   // jinhsi: spectro skill
   [[SHOREKEEPER, MORNYE, SUISUI, VERINA, BULING], [CANTARELLA, YINLIN, SUOMING], JINHSI],
+  [[LILY], [CANTARELLA, YINLIN, SUOMING], JINHSI],
   [[MORNYE, SHOREKEEPER, SUISUI, VERINA, BULING], [LYNAE_RUPTURE], JINHSI],
+  [[LILY], [LYNAE_RUPTURE], JINHSI],
   [[MORNYE, SHOREKEEPER, SUISUI, VERINA, BULING], [REBECCA], JINHSI],
+  [[LILY], [REBECCA], JINHSI],
   
-  [[SHOREKEEPER, MORNYE, SUISUI, VERINA, BULING], [ZHEZHI], JINHSI_FULL],
-  [JINHSI, [HSIN_UNISON], [SHOREKEEPER, MORNYE, SUISUI, VERINA, BULING]],
+  [[SHOREKEEPER, MORNYE, SUISUI, VERINA, BULING], [ZHEZHI], JINHSI],
+  [[LILY], [ZHEZHI], JINHSI],
+  [[LILY],JINHSI, [HSIN_UNISON], ],
+  [[SHOREKEEPER, MORNYE, SUISUI, VERINA],JINHSI, [HSIN_UNISON], ],
+  [[BULING],JINHSI, [HSIN_UNISON], ],
 
   // hsin (Electro Flare mode): electro skill flare
-  [[SUISUI, CHISA, SHOREKEEPER, MORNYE, VERINA], [ROVER_ELECTRO, CHISA], HSIN_FLARE],
+  [[SUISUI, CHISA, LILY, SHOREKEEPER, MORNYE, VERINA], [ROVER_ELECTRO, CHISA], HSIN_FLARE],
   [[BULING], [CHISA, ROVER_ELECTRO], HSIN_FLARE],
-  [[SUISUI], [BULING], HSIN_FLARE],
 
-  [[SUISUI, MORNYE, SHOREKEEPER, VERINA], [LYNAE_RUPTURE, REBECCA], HSIN_FLARE],
+  [[SUISUI, MORNYE, LILY, SHOREKEEPER, VERINA], [LYNAE_RUPTURE, REBECCA], HSIN_FLARE],
   [[BULING], [LYNAE_RUPTURE, REBECCA], HSIN_FLARE],
 
   // electro rover mdps: Apex Resonance, the Thrum of All Sounds chains
-  [[MORNYE, SHOREKEEPER, CHISA, BULING, VERINA, SUISUI], [LYNAE_RUPTURE], ROVER_ELECTRO_MDPS],
+  [[MORNYE, SHOREKEEPER, LILY, CHISA, BULING, VERINA, SUISUI], [LYNAE_RUPTURE], ROVER_ELECTRO_MDPS],
   [[MORNYE], [REBECCA], ROVER_ELECTRO_MDPS],
 
   // jingran: fusion heavy shielder
   [[LUPA], [MORTEFI, BRANT], JINGRAN],
-  [[SHOREKEEPER, VERINA, MORNYE, SUISUI, LUPA], [IUNO, MORTEFI], JINGRAN],
-  [[MORNYE, SHOREKEEPER, VERINA, SUISUI, LUPA], [LUPA, REBECCA], JINGRAN],
+  [[SHOREKEEPER, VERINA, LILY, MORNYE, SUISUI, LUPA], [IUNO, MORTEFI], JINGRAN],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, SUISUI, LUPA], [LUPA, REBECCA], JINGRAN],
   [[MORNYE], [LYNAE_RUPTURE], JINGRAN],
 
   // qingxiao: aero heavy/basic/liberation on tune strain
-  [[MORNYE, SHOREKEEPER, VERINA, CIACCONA], [DENIA_STRAIN, LYNAE_STRAIN, CIACCONA, SANHUA, MORTEFI, REBECCA, JIANXIN], QINGXIAO],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, CIACCONA], [DENIA_STRAIN, LYNAE_STRAIN, CIACCONA, SANHUA, MORTEFI, REBECCA, JIANXIN], QINGXIAO],
 
   // xuanling: havoc heavy attack on Havoc Bane — Chisa's +3 to every Negative Status cap is what
   // takes Unbroken Vow off its 3-stack 30% tier onto the 4-6 stack 36% one
-  [[SUISUI, CHISA, VERINA, SHOREKEEPER], [MORTEFI, REBECCA, IUNO, PHRO_10s, CHISA], XUANLING],
+  [[SUISUI, CHISA, LILY, VERINA, SHOREKEEPER], [MORTEFI, REBECCA, IUNO, PHRO_9s, CHISA], XUANLING],
 
   // lucy: spectro heavy on tune hack, with rebecca feeding her the outro
-  [[MORNYE, SHOREKEEPER, VERINA], [REBECCA, LYNAE_RUPTURE, MORTEFI], LUCY],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA], [REBECCA, LYNAE_RUPTURE, MORTEFI], LUCY],
 
   // hiyuki: glacio chafe/bite — every stack the team lands calculates at the target's own limit,
   // which is why Chisa (+3 to it) and Lucilla's Chafe build stand behind her
-  [[SUISUI], PHRO_10s, HIYUKI],
+  [[SUISUI], PHRO_9s, HIYUKI],
   [[SUISUI], CARLOTTA_FAST, HIYUKI],
-  [PHRO_10s, [LUCILLA], HIYUKI],
+  [PHRO_9s, [LUCILLA], HIYUKI],
   [HIYUKI, CARLOTTA_FAST, [LUCILLA_CHAFE]],
-  [[SUISUI, CHISA, MORNYE, VERINA, SHOREKEEPER], [LUCILLA_CHAFE, LYNAE_RUPTURE, CHISA, JIANXIN, ROVER_ELECTRO], HIYUKI],
+  [[SUISUI, CHISA, LILY, MORNYE, VERINA, SHOREKEEPER], [LUCILLA_CHAFE, LYNAE_RUPTURE, CHISA, JIANXIN, ROVER_ELECTRO], HIYUKI],
+
+  // geeek double dont publish
+  //[[SHOREKEEPER], [QIUYUAN, LUCILLA], SIGRIKA_DOUBLE],
+  //[[LILY], [QIUYUAN, LUCILLA], SIGRIKA_DOUBLE],
+
 
   // sigrika: aero + echo
+  [[SHOREKEEPER, VERINA, MORNYE], [QIUYUAN, CIACCONA, CANTARELLA], SIGRIKA_EBA],
+  [[LILY], [QIUYUAN, CIACCONA, CANTARELLA], SIGRIKA_EBA],
   [[QIUYUAN], [LUCILLA], SIGRIKA_FAST],
-  [[PHRO_10s], [QIUYUAN, LUCILLA], SIGRIKA_FAST],
-  [[QIUYUAN], SIGRIKA_EXTEND, [IUNO]],
+  //[[SHOREKEEPER], [QIUYUAN], SIGRIKA_DOUBLE],
+
+  [[PHRO_9s], [QIUYUAN, LUCILLA], SIGRIKA_FAST],
+  [[LILY], [PHRO_9s], SIGRIKA_FAST],
   [[MORNYE, SHOREKEEPER, VERINA], [LYNAE_RUPTURE], SIGRIKA_FAST],
+  [[LILY], [LYNAE_RUPTURE], SIGRIKA_FAST],
   [[CIACCONA], [QIUYUAN, LUCILLA], SIGRIKA_FAST],
   [[SHOREKEEPER, VERINA, MORNYE], [LUCILLA, ROVER_AERO], SIGRIKA_FAST],
-  [[SHOREKEEPER, VERINA, MORNYE], [QIUYUAN, CIACCONA, CANTARELLA], SIGRIKA_EXTEND],
+  [[LILY], [LUCILLA, ROVER_AERO], SIGRIKA_FAST],
+  [[QIUYUAN], SIGRIKA_FAST, [IUNO]],
 
   // luuk: spectro basic, tune strain
-  [[MORNYE, SHOREKEEPER, VERINA], [SANHUA, DENIA_STRAIN], LUUK_16s],
-  [[MORNYE, SHOREKEEPER, VERINA], [LYNAE_STRAIN], LUUK],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA], [SANHUA, DENIA_STRAIN], LUUK_16s],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA], [LYNAE_STRAIN], LUUK],
 
   // aemeath: fusion liberation on tune rupture — Mornye and Lynae answer the break beside her
-  [[MORNYE, SHOREKEEPER, VERINA], [LYNAE_RUPTURE, CHANGLI, LUPA], AEMEATH_RUPTURE],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA], [LYNAE_RUPTURE, //CHANGLI, 
+    LUPA], AEMEATH_RUPTURE],
   [[MORNYE], [JIANXIN, DENIA_BURST], AEMEATH_RUPTURE],
-  [[LUPA], [LYNAE_RUPTURE, CHANGLI, JIANXIN, BRANT], AEMEATH_RUPTURE],
+  [[LUPA], [LYNAE_RUPTURE,//CHANGLI, 
+    JIANXIN, BRANT], AEMEATH_RUPTURE],
   [[DENIA_BURST], [LYNAE_RUPTURE], AEMEATH_RUPTURE],
 
   // aemeath: fusion liberation on fusion burst — Denia's Burst mode feeds the stacks and amplifies
   [[SUISUI, CHISA], [DENIA_BURST], AEMEATH_BURST],
-  [[DENIA_BURST], [LYNAE_RUPTURE, CHANGLI, LUPA], AEMEATH_BURST],
-  [[LUPA], [CHANGLI, BRANT], AEMEATH_BURST],
-  [[SUISUI, SHOREKEEPER, VERINA, DENIA_BURST, CHISA, MORNYE], [DENIA_BURST], AEMEATH_BURST],
-  [[SUISUI, SHOREKEEPER, VERINA, LUPA, DENIA_BURST, CHISA], [LUPA, JIANXIN, ROVER_ELECTRO], AEMEATH_BURST],
+  [[DENIA_BURST], [LYNAE_RUPTURE, //CHANGLI, 
+    LUPA], AEMEATH_BURST],
+  [[LUPA], [//CHANGLI,
+     BRANT], AEMEATH_BURST],
+  [[SUISUI, SHOREKEEPER, LILY, VERINA, DENIA_BURST, CHISA, MORNYE], [DENIA_BURST], AEMEATH_BURST],
+  [[SUISUI, SHOREKEEPER, LILY, VERINA, LUPA, DENIA_BURST, CHISA], [LUPA, JIANXIN, ROVER_ELECTRO], AEMEATH_BURST],
 
   // qiuyuan: aero heavy echo
   [[SHOREKEEPER, VERINA, CIACCONA, MORNYE, SUISUI], [MORTEFI, IUNO, CIACCONA, LUCILLA], QIUYUAN_MDPS],
+  [[LILY], [MORTEFI, IUNO, CIACCONA, LUCILLA], QIUYUAN_MDPS],
   [[MORNYE, SHOREKEEPER, VERINA, CIACCONA, SUISUI], [REBECCA,LYNAE_RUPTURE], QIUYUAN_MDPS],
-  [[SHOREKEEPER, VERINA], PHRO_10s, QIUYUAN_MDPS],
+  [[LILY], [REBECCA,LYNAE_RUPTURE], QIUYUAN_MDPS],
+  [[SHOREKEEPER, VERINA], PHRO_9s, QIUYUAN_MDPS],
+  [[LILY], PHRO_9s, QIUYUAN_MDPS],
 
-  // galbrena: fusion echo and heavy
-  [[SHOREKEEPER, VERINA, MORNYE, SUISUI, LUPA], [MORTEFI, IUNO, QIUYUAN, LUCILLA], GALBRENA],
+  // galbrena: fusion echo focused
+  [[SHOREKEEPER, VERINA, MORNYE, SUISUI, LUPA], [QIUYUAN, LUCILLA], GALBRENA_ECHO],
+  [[LILY], [QIUYUAN, LUCILLA], GALBRENA_ECHO],
+
+  [[QIUYUAN], [LUCILLA], GALBRENA],
+  [[PHRO_9s], [QIUYUAN], GALBRENA],
+
+  // galbrena: fusion echo heavy mix
+  [[LILY, LUPA, SHOREKEEPER], [PHRO_9s], GALBRENA],
+  [[SHOREKEEPER, VERINA, MORNYE, SUISUI, LUPA], [MORTEFI, IUNO], GALBRENA],
+  [[LILY], [MORTEFI, IUNO], GALBRENA],
   [[LUPA], [BRANT], GALBRENA],
   [[MORNYE, SHOREKEEPER, VERINA, SUISUI, DENIA_BURST], [LUPA], GALBRENA],
+  [[LILY], [LUPA], GALBRENA],
   [[MORNYE, SHOREKEEPER, VERINA, SUISUI, DENIA_BURST], [REBECCA], GALBRENA],
+  [[LILY], [REBECCA], GALBRENA],
   [[MORNYE], [LYNAE_RUPTURE], GALBRENA],
 
   // iuno mdps: aero + echo
   [[CIACCONA], [JIANXIN], IUNO_MDPS],
   [[SHOREKEEPER, CIACCONA, VERINA, MORNYE, SUISUI], [CIACCONA, JIANXIN], IUNO_MDPS],
+  [[LILY], [CIACCONA, JIANXIN], IUNO_MDPS],
   [[MORNYE, SHOREKEEPER, CIACCONA, VERINA, SUISUI], [LYNAE_RUPTURE], IUNO_MDPS],
+  [[LILY], [LYNAE_RUPTURE], IUNO_MDPS],
 
   // augusta: electro heavy shielder
-  [[SHOREKEEPER, VERINA, MORNYE, SUISUI], [IUNO, MORTEFI], AUGUSTA],
-  [[MORNYE, SHOREKEEPER, VERINA, SUISUI], [REBECCA], AUGUSTA],
+  [[SHOREKEEPER, VERINA, LILY, MORNYE, SUISUI], [IUNO, MORTEFI], AUGUSTA],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, SUISUI], [REBECCA], AUGUSTA],
   [[MORNYE], [LYNAE_RUPTURE], AUGUSTA],
 
   // phrolova: havoc, echo, skill
+  // each team on the loadout that beats the other two at both S0 and S2: 3 Forte Basics (PHRO_9s),
+  // 4 (PHRO_11s) or 5 (PHRO_12s)
   [PHRO_12s, [JINHSI_SUPPORT], [CANTARELLA]],
-  [PHRO_10s, [QIUYUAN, LUCILLA, DANJIN], [LYNAE_RUPTURE, QIUYUAN, LUCILLA]],
-  [PHRO_10s, [LYNAE_RUPTURE, DANJIN], [LUCILLA, QIUYUAN, CANTARELLA]],
+  [PHRO_9s, [LUCILLA], [QIUYUAN]],
+  [PHRO_9s, [DANJIN], [LYNAE_RUPTURE, LUCILLA]],
+  [PHRO_11s, [QIUYUAN], [LUCILLA]],
+  [PHRO_12s, [QIUYUAN], [LYNAE_RUPTURE]],
+  [PHRO_11s, [LUCILLA], [LYNAE_RUPTURE, CANTARELLA]],
+  [PHRO_11s, [DANJIN], [QIUYUAN, CANTARELLA]],
+  [PHRO_11s, [LYNAE_RUPTURE], [LUCILLA, QIUYUAN, CANTARELLA]],
 
-  [PHRO_12s, [QIUYUAN, ROCCIA], [QIUYUAN, CANTARELLA]],
+  [PHRO_12s, [QIUYUAN, ROCCIA], [CANTARELLA]],
+  [PHRO_11s, [ROCCIA], [QIUYUAN]],
 
-  [PHRO_12s, [SHOREKEEPER, BULING, MORNYE, SUISUI, VERINA], [QIUYUAN, DANJIN, LUCILLA, CANTARELLA, ROCCIA]],
-  [PHRO_12s, [QIUYUAN, ROCCIA, DANJIN], [SHOREKEEPER, SUISUI, MORNYE, VERINA]],
+  [PHRO_12s, [SHOREKEEPER, BULING, MORNYE, SUISUI, VERINA], [QIUYUAN, CANTARELLA, ROCCIA]],
+  [PHRO_12s, [LILY], [QIUYUAN, CANTARELLA, ROCCIA]],
+  [PHRO_12s, [SHOREKEEPER, BULING, SUISUI], [DANJIN]],
+  [PHRO_12s, [LILY], [DANJIN]],
+  [PHRO_12s, [SHOREKEEPER, MORNYE, VERINA], [LUCILLA]],
+  [PHRO_12s, [LILY], [LUCILLA]],
+  [PHRO_11s, [BULING, SUISUI], [LUCILLA]],
+  [PHRO_11s, [LILY], [LUCILLA]],
+  [PHRO_11s, [MORNYE, VERINA], [DANJIN]],
+  [PHRO_11s, [LILY], [DANJIN]],
+  [PHRO_12s, [QIUYUAN, ROCCIA], [SHOREKEEPER, SUISUI, MORNYE, VERINA]],
+  [PHRO_12s, [QIUYUAN, ROCCIA], [LILY]],
+  [PHRO_12s, [DANJIN], [MORNYE]],
+  [PHRO_11s, [DANJIN], [SHOREKEEPER, VERINA]],
+  [PHRO_11s, [DANJIN], [LILY]],
+  [PHRO_9s, [DANJIN], [SUISUI]],
 
   [PHRO_12s, [MORNYE], [LYNAE_RUPTURE]],
 
   // cartethyia: aero HP-scaling basic attack on Aero Erosion — Aero Rover and Chisa both raise the
   // status's own cap, which is what her Erosion ticks and her Blade's amplification both read
   [[CHISA, ROVER_AERO, CIACCONA], [SANHUA, ROVER_AERO], CARTETHYIA],
-  [[ROVER_AERO, SUISUI, CHISA, CIACCONA, SHOREKEEPER, MORNYE], [SANHUA, ROVER_AERO, CHISA], CARTETHYIA],
+  [[SUISUI, CHISA, LILY, CIACCONA, SHOREKEEPER, MORNYE], [SANHUA, ROVER_AERO, CHISA], CARTETHYIA],
+  [[SUISUI, MORNYE, LILY, SHOREKEEPER], [CIACCONA], CARTETHYIA],
 
   // zani: spectro frazzle heavy
-  [[SHOREKEEPER, SUISUI, VERINA, MORNYE, ROVER_SPECTRO, CHISA], [PHOEBE_CONFESSION], ZANI],
+  [[SHOREKEEPER, CHISA, LILY, SUISUI, VERINA, MORNYE], [ROVER_SPECTRO, PHOEBE_CONFESSION], ZANI],
+  [[ROVER_SPECTRO, CIACCONA_YELLOW, PHOEBE_CONFESSION], [LYNAE_RUPTURE, MORTEFI, REBECCA], ZANI],
+  [[CIACCONA_YELLOW, ROVER_SPECTRO], [ROVER_SPECTRO, PHOEBE_CONFESSION], ZANI],
 
   // phoebe - spectro frazzle heavy
-  [[SHOREKEEPER, CHISA, SUISUI, VERINA, MORNYE], [ROVER_SPECTRO], PHOEBE_ABSOLUTION],
-  [[ROVER_SPECTRO], [LYNAE_RUPTURE, MORTEFI, REBECCA], PHOEBE_ABSOLUTION],
+  [[SHOREKEEPER, CHISA, LILY, SUISUI, VERINA, MORNYE], [ROVER_SPECTRO, CIACCONA_YELLOW], PHOEBE_ABSOLUTION],
+  [[ROVER_SPECTRO, CIACCONA_YELLOW], [LYNAE_RUPTURE, MORTEFI, REBECCA], PHOEBE_ABSOLUTION],
+  [[CIACCONA_YELLOW], [ROVER_SPECTRO ], PHOEBE_ABSOLUTION],
 
   // brant: fusion basic
-  [[SHOREKEEPER, DENIA_BURST, MORNYE, VERINA, SUISUI], [SANHUA, DENIA_BURST], BRANT_MDPS],
-  [[MORNYE, SHOREKEEPER, DENIA_BURST, VERINA, SUISUI], [LUPA], BRANT_MDPS],
+  [[SHOREKEEPER, DENIA_BURST, LILY, MORNYE, VERINA, SUISUI], [SANHUA, DENIA_BURST], BRANT_MDPS],
+  [[MORNYE, SHOREKEEPER, LILY, DENIA_BURST, VERINA, SUISUI], [LUPA], BRANT_MDPS],
   [[LUPA], BRANT, CHANGLI],
-  [[LUPA], BRANT, ENCORE],
+  //[[LUPA], BRANT, ENCORE],
 
   // cantarella: havoc basic, echo
   [[SHOREKEEPER], [SANHUA, ROCCIA], CANTARELLA_MDPS],
   [[SHOREKEEPER, VERINA, MORNYE, SUISUI], [SANHUA, ROCCIA], CANTARELLA_MDPS],
+  [[LILY], [SANHUA, ROCCIA], CANTARELLA_MDPS],
   [[MORNYE], [REBECCA], CANTARELLA_MDPS],
   [[MORNYE], [LYNAE_RUPTURE], CANTARELLA_MDPS],
 
   // carlotta: glacio skill
-  [[SHOREKEEPER, BULING, VERINA, MORNYE, SUISUI], [BRANT, ZHEZHI, LUCILLA_CHAFE], CARLOTTA],
+  [[SHOREKEEPER, BULING, LILY, VERINA, MORNYE, SUISUI], [BRANT, ZHEZHI, LUCILLA_CHAFE], CARLOTTA],
   [[MORNYE], [REBECCA], CARLOTTA],
   [[MORNYE], [LYNAE_RUPTURE], CARLOTTA],
 
   // roccia: havoc heavy
-  [[SHOREKEEPER, VERINA, MORNYE, SUISUI], [MORTEFI, IUNO], ROCCIA_MDPS],
-  [[MORNYE, SHOREKEEPER, VERINA, SUISUI], [REBECCA], ROCCIA_MDPS],
+  [[SHOREKEEPER, VERINA, LILY, MORNYE, SUISUI], [MORTEFI, IUNO], ROCCIA_MDPS],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, SUISUI], [REBECCA], ROCCIA_MDPS],
   [[MORNYE], [LYNAE_RUPTURE], ROCCIA_MDPS],
 
   // camellya: havoc basic
@@ -229,8 +297,8 @@ const TEAMS: Slot[][] = [
 
   // xiangli yao: electro liberation
   [[SHOREKEEPER], [YINLIN], XIANGLI_YAO],
-  [[SHOREKEEPER, VERINA, MORNYE, SUISUI], [YINLIN, JIANXIN], XIANGLI_YAO],
-  [[MORNYE, SHOREKEEPER, VERINA, SUISUI], [LYNAE_RUPTURE], XIANGLI_YAO],
+  [[SHOREKEEPER, VERINA, LILY, MORNYE, SUISUI], [YINLIN, JIANXIN], XIANGLI_YAO],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, SUISUI], [LYNAE_RUPTURE], XIANGLI_YAO],
 
   // changli: fusion skill+liberation
   [[DENIA_BURST], [LUPA], CHANGLI],
@@ -239,8 +307,8 @@ const TEAMS: Slot[][] = [
 
   // jiyan: aero heavy
   [[CIACCONA], [IUNO], JIYAN],
-  [[SHOREKEEPER, VERINA, CIACCONA, MORNYE, SUISUI], [MORTEFI, IUNO, CIACCONA, PHRO_10s], JIYAN],
-  [[MORNYE, SHOREKEEPER, VERINA, CIACCONA, SUISUI], [REBECCA], JIYAN],
+  [[SHOREKEEPER, VERINA, LILY, CIACCONA, MORNYE, SUISUI], [MORTEFI, IUNO, CIACCONA, PHRO_9s], JIYAN],
+  [[MORNYE, SHOREKEEPER, LILY, VERINA, CIACCONA, SUISUI], [REBECCA], JIYAN],
   [[MORNYE], [LYNAE_RUPTURE], JIYAN],
 
   // encore: fusion basic

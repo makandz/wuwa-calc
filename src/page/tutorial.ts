@@ -26,7 +26,7 @@
  * already shows one. That is a wait, not a dismissal: nothing is marked, and it opens the moment the
  * filters come off. The README's line starts it over, past the Start card, wherever the reader is.
  */
-import { AXES, scopedKey } from "../solver.js";
+import { AXES, scopedKey } from "../solve/solver.js";
 import { searchChoice } from "./filterbar.js";
 import { echoFilters, filters, refineFilters, resonatorFilters, sequenceFilters, weaponFilters, TEAMS, visibleRows } from "./model.js";
 import { rect, CLICKING, CLICK } from "./panels.js";
@@ -577,6 +577,13 @@ document.addEventListener("pointerout", (e) => {
   if (!from || (e as PointerEvent).relatedTarget instanceof Element
     && ((e as PointerEvent).relatedTarget as Element).closest(".rtable.loadout .c.has") === from) return;
   clearTimeout(hoverTimer);
+}, true);
+// a press or tap on the piece passes it at once — a touch screen has no hover to wait out
+document.addEventListener("click", (e) => {
+  if (!layer || layer.hidden || stage !== DETAIL_STAGE || !hovered(e)) return;
+  clearTimeout(hoverTimer);
+  setStage(DETAIL_STAGE + 1);
+  place();
 }, true);
 
 // ...then any figure that opens the breakdown — a member's, and after it the team's own row.

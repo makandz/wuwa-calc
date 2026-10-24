@@ -7,10 +7,9 @@ import {
   addStat,
   frozenStacks,
   casting,
-  currentAction, isType,
+  isType,
   revokeCurrent,
   applyCurrent,
-  removeStack,
   applyTeam,
   stacksOfEnemy,
   revokeTeam,
@@ -18,7 +17,6 @@ import {
   onCast,
   onType,
   onInflict,
-  either,
   isHeld,
   stacksOf,
   lostOnSwap,
@@ -27,29 +25,40 @@ import { consumedConcerto, gainedUnison } from "../shared/unison.js";
 import { TUNE_RUPTURE_SHIFTING, TUNE_STRAIN_SHIFTING } from "../shared/tunebreak.js";
 import { AERO_EROSION, FUSION_BURST, GLACIO_CHAFE, HAVOC_BANE } from "../shared/status.js";
 
-/** Changli's sig: Crimson Phoenix. +12% ATK flat. Searing Feather: a stack per hit at a 0.5s
- *  ICD — one every 30 frames of the wielder's own field time, on a clock their presses keep up
- *  and their swap-out drops — and five outright on a Resonance Skill, up to 14, each +4% Resonance Skill
- *  DMG Bonus. The stacks carry across visits: the kit's "removed 12s after reaching max" is taken
- *  as the Outro cast at max stacks dropping them, paid on that outro first. */
+/** Changli's sig: Crimson Phoenix. +12% ATK flat. Searing Feather: a stack on dealing damage, once
+ *  every 0.5s, and five on casting a Resonance Skill, up to 14, each +4% Resonance Skill DMG Bonus.
+ *  Reaching 14 removes every stack 12s later. */
 export const BLAZING_BRILLIANCE = refinements((r, rank) => {
   const SEARING_FEATHER: Buff = new Buff({
     name: `Blazing Brilliance: Crimson Phoenix${rank}`, maxStacks: 14,
     stats: [[Stat.DmgBonus, [4, 5, 6, 7, 8][r]!, Type.Skill]], perStack: true,
-    afterAction: () => { if (casting(Cast.Outro) && stacksOf(SEARING_FEATHER) >= 14) revokeCurrent(SEARING_FEATHER); },
   });
-  const SEARING_CLOCK = new Buff({
-    name: `Blazing Brilliance: Crimson Phoenix${rank}`, hidden: true,
-    tick: { every: 30, fire: () => applyCurrent(SEARING_FEATHER, 1) },
-    updateBuffs: () => lostOnSwap(),
+  const SEARING_GAP = new Buff({ duration: 30 });
+  // started at max stacks, it drops them all on its one tick 12s on
+  const SEARING_EXPIRY: Buff = new Buff({
+    tick: {
+      every: 60 * 12,
+      fire: () => {
+        revokeCurrent(SEARING_FEATHER);
+        revokeCurrent(SEARING_EXPIRY);
+      },
+    },
   });
+  const gain = (n: number): void => {
+    if (isHeld(SEARING_EXPIRY)) return;
+    applyCurrent(SEARING_FEATHER, n);
+    if (stacksOf(SEARING_FEATHER) >= 14) applyCurrent(SEARING_EXPIRY, 1);
+  };
   return new Weapon({
+    id: 21020016,
     weaponType: WeaponType.Sword, name: `Blazing Brilliance${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritDmg, 48.6], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
-    grants: [
-      { on: isActive, buff: SEARING_CLOCK },
-      { on: onCast(Cast.Skill), buff: SEARING_FEATHER, stacks: 5 },
-    ],
+    updateBuffs: () => { if (casting(Cast.Skill)) gain(5); },
+    afterHit: () => {
+      if (isHeld(SEARING_GAP)) return;
+      gain(1);
+      applyCurrent(SEARING_GAP, 1);
+    },
   });
 });
 
@@ -66,6 +75,7 @@ export const RED_SPRING = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [40, 50, 60, 70, 80][r]!, Type.Basic]],
   });
   return new Weapon({
+    id: 21020026,
     weaponType: WeaponType.Sword, name: `Red Spring${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
@@ -89,8 +99,9 @@ export const UNFLICKERING_VALOR = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [24, 30, 36, 42, 48][r]!, Type.Basic]],
   });
   return new Weapon({
+    id: 21020036,
     weaponType: WeaponType.Sword, name: `Unflickering Valor${rank}`,
-    stats: [[Stat.BaseAtk, 412.5], [Stat.Er, 77.04], [Stat.CritRate, [8, 10, 12, 14, 16][r]!]],
+    stats: [[Stat.BaseAtk, 412.5], [Stat.ER, 77.04], [Stat.CritRate, [8, 10, 12, 14, 16][r]!]],
     grants: [
       { on: onCast(Cast.Liberation), buff: LAUGHTER_PREVAILS_LIB },
       { on: onType(Type.Basic), buff: LAUGHTER_PREVAILS_BASIC, onHit: true },
@@ -116,6 +127,7 @@ export const EMERALD_SENTENCE = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [30, 37.5, 45, 52.5, 60][r]!, Type.Heavy]], perStack: true,
   });
   return new Weapon({
+    id: 21020066,
     weaponType: WeaponType.Sword, name: `Emerald Sentence${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
@@ -138,6 +150,7 @@ export const GLINT_OF_CLOUDS = refinements((r, rank) => {
     applyStats: () => { if (frozenStacks() >= 5) addStat(Stat.DefIgnoreNew, [10, 12.5, 15, 17.5, 20][r]!, Attribute.Aero); },
   });
   return new Weapon({
+    id: 21020106,
     weaponType: WeaponType.Sword, name: `Glint of Clouds${rank}`,
     stats: [[Stat.BaseAtk, 500], [Stat.CritRate, 36], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [{ on: onInflict(TUNE_STRAIN_SHIFTING), buff: EVILS_SCOURGE }],
@@ -160,6 +173,7 @@ export const FROSTBURN = refinements((r, rank) => {
     stats: [[Stat.Amp, [20, 25, 30, 35, 40][r]!, Subtype.GlacioChafe]], when: isActive,
   });
   return new Weapon({
+    id: 21020086,
     weaponType: WeaponType.Sword, name: `Frostburn${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     // `onInflict`: a "when *you* inflict" payout, so the two extra stacks Lucilla's Film Roll
@@ -183,6 +197,7 @@ export const AZURE_OATH = refinements((r, rank) => {
     stats: [[Stat.Amp, [36, 45, 54, 63, 72][r]!, Type.Heavy], [Stat.DefIgnoreNew, [12, 15, 18, 21, 24][r]!, Type.Heavy]],
   });
   return new Weapon({
+    id: 21020096,
     weaponType: WeaponType.Sword, name: `Azure Oath${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.DmgBonus, [12, 15, 18, 21, 24][r]!]],
     grants: [{ on: onInflict(HAVOC_BANE), buff: UNBENDING }],
@@ -201,6 +216,7 @@ export const EVERBRIGHT_POLESTAR = refinements((r, rank) => {
     applyStats: () => { if (isType(Type.Liberation)) addStat(Stat.ResIgnore, [10, 15, 20, 25, 30][r]!, Attribute.Fusion); },
   });
   return new Weapon({
+    id: 21020076,
     weaponType: WeaponType.Sword, name: `Everbright Polestar${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.DmgBonus, [12, 15, 18, 21, 24][r]!]],
     grants: [{ on: onInflict(TUNE_RUPTURE_SHIFTING, FUSION_BURST), buff: STARCHASER }],
@@ -220,6 +236,7 @@ export const DEFIERS_THORN = refinements((r, rank) => {
     applyStats: () => { if (stacksOfEnemy(AERO_EROSION) > 0) addStat(Stat.Amp, [20, 25, 30, 35, 40][r]!); },
   });
   return new Weapon({
+    id: 21020056,
     weaponType: WeaponType.Sword, name: `Defier's Thorn${rank}`,
     // the 12% is A Free Knight's Tarantella's own flat half
     stats: [[Stat.BaseAtk, 412.5], [Stat.BonusHp, 72.225], [Stat.BonusHp, [12, 15, 18, 21, 24][r]!]],
@@ -250,6 +267,7 @@ export const UNSPOKEN_RUE = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [40, 50, 60, 70, 80][r]!, Attribute.Electro]],
   });
   return new Weapon({
+    id: 21020107,
     weaponType: WeaponType.Sword, name: `Unspoken Rue${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     updateBuffs: () => {

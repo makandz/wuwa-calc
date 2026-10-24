@@ -2,8 +2,9 @@
  *  own `refinements()`); a number that grows with rank is written as its five values. */
 import { WeaponType, Stat, EnemyStat, Attribute, Type, Cast, BuffTarget } from "../engine/stats.js";
 import { Buff, Debuff, Weapon, refinements } from "../engine/gear.js";
-import { addStat, isHeld, onCast, onType, onInflict, both } from "../engine/context.js";
-import { AERO_EROSION } from "../shared/status.js";
+import { addStat, addGain, casting, isActive, isHeld, onCast, onType, onInflict, onApplied, both, either } from "../engine/context.js";
+import { AERO_EROSION, HEALS } from "../shared/status.js";
+import { gainedUnison, unisonResponse } from "../shared/unison.js";
 import { TUNE_HACK_SHIFTING, TUNE_RUPTURE_SHIFTING, TUNE_STRAIN_SHIFTING } from "../shared/tunebreak.js";
 
 /** The Last Dance, Carlotta's sig: Silent Eulogy. +12% ATK flat. Intro/Liberation grants
@@ -15,6 +16,7 @@ export const THE_LAST_DANCE = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [48, 60, 72, 84, 96][r]!, Type.Skill]],
   });
   return new Weapon({
+    id: 21030016,
     weaponType: WeaponType.Pistols, name: `The Last Dance${rank}`,
     stats: [[Stat.BaseAtk, 500], [Stat.CritDmg, 72], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [{ on: onCast(Cast.Intro, Cast.Liberation), buff: SILENT_EULOGY }],
@@ -36,6 +38,7 @@ export const LUX_UMBRA = refinements((r, rank) => {
     stats: [[Stat.Amp, [24, 30, 36, 42, 48][r]!, Type.Echo]],
   });
   return new Weapon({
+    id: 21030036,
     weaponType: WeaponType.Pistols, name: `Lux & Umbra${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritDmg, 48.6], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     applyStats: () => {
@@ -64,6 +67,7 @@ export const WOODLAND_ARIA = refinements((r, rank) => {
     stats: [[EnemyStat.ResReduce, [10, 11.5, 13, 14.5, 16][r]!, Attribute.Aero]],
   });
   return new Weapon({
+    id: 21030026,
     weaponType: WeaponType.Pistols, name: `Woodland Aria${rank}`,
     stats: [[Stat.BaseAtk, 500], [Stat.CritRate, 36], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
@@ -89,6 +93,7 @@ export const SPECTRUM_BLASTER = refinements((r, rank) => {
     stats: [[Stat.DmgBonus, [8, 10, 12, 14, 16][r]!]], perStack: true,
   });
   return new Weapon({
+    id: 21030046,
     weaponType: WeaponType.Pistols, name: `Spectrum Blaster${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritRate, 24.3], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
@@ -120,6 +125,7 @@ export const SKULL_THRASHER = refinements((r, rank) => {
     stats: [[Stat.BonusAtk, [24, 30, 36, 42, 48][r]!]],
   });
   return new Weapon({
+    id: 21030066,
     weaponType: WeaponType.Pistols, name: `Skull Thrasher${rank}`,
     stats: [[Stat.BaseAtk, 500], [Stat.CritDmg, 72], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
@@ -144,11 +150,45 @@ export const SPECTRAL_TRIGGER = refinements((r, rank) => {
     stats: [[Stat.Amp, [30, 37.5, 45, 52.5, 60][r]!, Type.Heavy], [Stat.DefIgnoreNew, [10, 12.5, 15, 17.5, 20][r]!, Type.Heavy]],
   });
   return new Weapon({
+    id: 21030056,
     weaponType: WeaponType.Pistols, name: `Spectral Trigger${rank}`,
     stats: [[Stat.BaseAtk, 587.5], [Stat.CritDmg, 48.6], [Stat.BonusAtk, [12, 15, 18, 21, 24][r]!]],
     grants: [
       { on: onCast(Cast.Skill), buff: SUNKEN_DREAM_STACKS },
       { on: onInflict(TUNE_HACK_SHIFTING), buff: SUNKEN_DREAM_HACK },
+    ],
+  });
+});
+
+/** Lullaby, Lily's sig (3.8.1 beta): Dreamland Solace. +12% HP flat, and +8 Concerto on a
+ *  Liberation (once every 20s, which her 25s cooldown never meets). Each heal gives the team
+ *  Soothed Soul for 30s and the active resonator +24% Echo Skill DMG Bonus for 6s. */
+export const LULLABY = refinements((r, rank) => {
+  // nanoka's text leaves the ATK's own duration unsubstituted; it ends with Soothed Soul, which
+  // her heals refresh every 3s, so permanent as Tinged Yearning's rider is
+  const SOOTHED_SOUL_UNISON = new Buff({
+    name: `Lullaby: Dreamland Solace${rank} (unison)`,
+    stats: [[Stat.BonusAtk, [16, 20, 24, 28, 32][r]!]],
+  });
+  const SOOTHED_SOUL = new Buff({
+    name: `Lullaby: Soothed Soul${rank}`,
+    duration: 60 * 30,
+    grants: [{ on: either(gainedUnison, unisonResponse), buff: SOOTHED_SOUL_UNISON }],
+  });
+  // handed to the team and paid to whoever is on field, the "active Resonator" of the text
+  const DREAMLAND_ECHO = new Buff({
+    name: `Lullaby: Dreamland Solace${rank} (echo)`,
+    duration: 60 * 6,
+    applyStats: () => { if (isActive()) addStat(Stat.DmgBonus, [24, 30, 36, 42, 48][r]!, Type.Echo); },
+  });
+  return new Weapon({
+    id: 21030076,
+    weaponType: WeaponType.Pistols, name: `Lullaby${rank}`,
+    stats: [[Stat.BaseAtk, 412.5], [Stat.ER, 77.04], [Stat.BonusHp, [12, 15, 18, 21, 24][r]!]],
+    updateBuffs: () => { if (casting(Cast.Liberation)) addGain({ concerto: [800, 1000, 1200, 1400, 1600][r]! }); },
+    grants: [
+      { on: onApplied(HEALS), buff: SOOTHED_SOUL, to: BuffTarget.Team },
+      { on: onApplied(HEALS), buff: DREAMLAND_ECHO, to: BuffTarget.Team },
     ],
   });
 });

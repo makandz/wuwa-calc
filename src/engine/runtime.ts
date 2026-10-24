@@ -5,12 +5,16 @@
  */
 import { Stat, Attribute, Type, Subtype } from "./stats.js";
 import type { Cast } from "./stats.js";
-import type { Action } from "./rotation.js";
+import type { Action, Bullet } from "./rotation.js";
 import type { Gear } from "./gear.js";
 import type { State, TeamMember, HeldBuff } from "./state.js";
+import type { Gain } from "./context.js";
 
-/** One `addToCast()` call, for the hover panels: who added what — energy, concerto, forte 1-5. */
-export interface CastAdd { source: string; owner: string | null; gains: number[] }
+/** One `addGain()` call, for the hover panels: who added what — energy, concerto, forte 1-5,
+ *  off-tune, direct off-tune — and whether on the cast or a hit. */
+/** A gain a hook made (`addGain()`), or one banked onto a member outside any row of theirs
+ *  (`background`: a tick, a teammate's energy share), which their next row carries. */
+export interface GainAdd { source: string; owner: string | null; gains: number[]; onCast: boolean; background?: boolean; label?: string }
 
 /** The engine's ambient state: which team, member, gear and action a hook is running for, plus the
  *  per-action scratch every phase writes through. One object rather than a module of `let`s
@@ -57,16 +61,30 @@ export const ctx: {
   /** Set while a stat hook (applyStats, convertStats, lateConvertStats, constantStats) runs: none may
    *  change a buff, a gauge or the queue, only write stats. */
   inStats: boolean;
-  /** Set while a marker resolves (an Intro Resolver, ECHO): it picks a cast and may only read. */
+  /** Set while constantStats run: a constant ATK%/HP%/DEF% is a panel entry, floored on its own. */
+  inConst: boolean;
+  /** An echo's own panel entries while it adds them (`panelEntry()`), summed before the one floor. */
+  panelGroup: number[] | null;
+  /** Set while a marker resolves (an Intro Resolver, an echo): it picks a cast and may only read. */
   inResolve: boolean;
   /** Set while a handoff plans the visit it opens, ahead of its Outro: what that Outro moves hasn't. */
   handoffPending: boolean;
-  /** Set while a cast's hooks run — where `addToCast()` may add to what it banks. */
+  /** Set while a cast's hooks run — where `currentCast()` reads and `addGain()` adds to the cast. */
   inCast: boolean;
-  /** What cast hooks added to this press's cast (`addToCast()`): energy, concerto, forte 1-5. */
-  castGain: number[];
+  /** Set while a hit's own hooks run ahead of its damage (updateDebuffs, hitGlobal, an infliction's
+   *  grant) — where `addGain()` adds to the hit. */
+  inHit: boolean;
+  /** Set while `afterAction` runs: `currentCast()` reads, `currentHit()` doesn't. */
+  inEnd: boolean;
+  /** The bullet landing (`currentHit()`), from the hit's first hook to its last; null on a cast. */
+  hit: Bullet | null;
+  /** How many of its press's hits are still to land, the one landing included (`lastHit()`). */
+  hitsLeft: number;
+  /** What hooks added to the part being evaluated (`addGain()`): energy, concerto, forte 1-5,
+   *  off-tune, direct off-tune. */
+  gain: number[];
   /** ...and who added it, traced only. */
-  castAdds: CastAdd[];
+  adds: GainAdd[];
   /** How many stat writes the action being evaluated has made — zeroed at its start, so the
    *  constant base can be copied in rather than added when the grant phases wrote nothing. */
   wrote: number;
@@ -85,9 +103,6 @@ export const ctx: {
    *  action; read by `isType()`, the tag list, and the snapshot. */
   overrideType: Type | null;
   overrideSubtype: Subtype | null;
-  /** "Lost on swap" buffs a swap cancel keeps paying on: revoked once the press is done
-   *  (`lostOnSwap()`, `BuffDef.lostOnSwap`). Cleared by `evaluate()` for every action. */
-  swapLosses: Set<Gear>;
   /** A second cast this action would otherwise also count as, dropped for this action alone (see
    *  `dropCast()`). Cleared by `evaluate()` every action, like the type overrides above. */
   droppedCast: Cast | null;
@@ -97,6 +112,8 @@ export const ctx: {
   /** How far an off-field resonator's time fell behind the clock over the press just evaluated
    *  (`evaluate()`): + its motion stop, - time stop it didn't cover. `run()` applies it. */
   offFieldShift: number;
+  /** Where that hold starts on the real timer — a motion stop can begin mid-press. */
+  offFieldFrom: number;
   /** The frame that press was cast (`castFrame()`), set with `pressFrames`. */
   pressStart: number;
   /** The real frames the press being evaluated plays: its animation to its cut, and the cut's delay. */
@@ -104,12 +121,21 @@ export const ctx: {
   /** The tag the press being evaluated was cut short by (`ActionTag`, "" for none, "field" for a
    *  press beside the fight) — its cast's, and carried to its end (`pressWasCut()`). */
   pressCut: string;
-  /** The step after the press being run, as written (a dash marker, say) — `nextIsPlainDodge()` (rotation.ts). */
-  nextStep: Action | null;
-  /** Set by `replaceNextDash()`: the cut the press is relabelled as, its dodge dropped; "" for none. */
-  dashReplaced: string;
+  /** Set by `replaceCut()`: the cut the press is relabelled as, its dodge or swap dropped; "" for none. */
+  cutReplaced: string;
   /** The press a hold cancel holds into, set by `run()` for evaluate() to read where it lets go. */
   holdNext: Action | null;
+  /** The acting member's presses still to come off the rotation, each resolved as reached (`nextPresses()`); set by `run()`. */
+  nextPresses: () => Iterable<Action>;
+  /** evaluate.ts's `bankLoose()`, set where it is defined: context.ts importing it would close an
+   *  import cycle (gear -> context -> evaluate -> rotation -> gear) that leaves `Gear` undefined. */
+  bankLoose: (state: State, slot: TeamMember, gain: Gain) => void;
+  /** What a hold cancel holds into once the steps run out: the press the next loop would cast after
+   *  the Intro a fight ends on, which it never plays (rotation.ts's `finish()`). */
+  holdBeyond: Action | null;
+  /** The member whose row `evaluate()` is building, null outside one: a gauge moved on anyone else is
+   *  theirs to carry to their next row (`TeamMember.background`). */
+  rowSlot: TeamMember | null;
   /** Where the hold cancel just evaluated let go, in animation frames; -1 for any other press. */
   holdCut: number;
   /** Bumped at the top of every `evaluate()`: what stamps this action's grant records (`applied`,
@@ -135,11 +161,17 @@ export const ctx: {
   guarded: false,
   mutHash: 0,
   inStats: false,
+  inConst: false,
+  panelGroup: null,
   inResolve: false,
   handoffPending: false,
   inCast: false,
-  castGain: [0, 0, 0, 0, 0, 0, 0],
-  castAdds: [],
+  inHit: false,
+  inEnd: false,
+  hit: null,
+  hitsLeft: 1,
+  gain: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  adds: [],
   wrote: 0,
   recording: false,
   readPhase: 0,
@@ -147,16 +179,21 @@ export const ctx: {
   constVersion: 0,
   overrideType: null,
   overrideSubtype: null,
-  swapLosses: new Set(),
   droppedCast: null,
   pressFrames: 0,
   actReal: 0,
   pressCut: "",
-  nextStep: null,
-  dashReplaced: "",
+  cutReplaced: "",
   holdNext: null,
+  nextPresses: () => [],
+  bankLoose: () => {
+    throw new Error("bankLoose() before evaluate.ts loaded");
+  },
+  holdBeyond: null,
+  rowSlot: null,
   holdCut: -1,
   offFieldShift: 0,
+  offFieldFrom: 0,
   pressStart: 0,
   actionStamp: 0,
   tracing: false,
@@ -236,13 +273,10 @@ export const noteMutation = (id: number, n: number): void => {
 };
 /** The stats `evaluate()` banks into the running gauges — a variant that moves any of these would
  *  bank differently, so the real build's fight isn't its fight either. */
-export const RESOURCE_STATS: Stat[] = [
-  Stat.AddEnergy, Stat.AddConcerto, Stat.AddOfftune, Stat.DirectOfftune, Stat.OfftuneBuildup, Stat.EnergyRegenMult,
-  Stat.AddForte1, Stat.AddForte2, Stat.AddForte3, Stat.AddForte4, Stat.AddForte5,
-];
+export const RESOURCE_STATS: Stat[] = [Stat.OfftuneBuildup, Stat.HitEnergyMult, Stat.OfftuneMult];
 
 /** What was granted (or spent) during the action being evaluated, by Gear and by whose doing —
- *  what `applied()`/`appliedByMe()`/`consumed()` answer from. Flat arrays indexed by `Gear.id`,
+ *  what `applied()`/`appliedByMe()`/`consumed()` answer from. Flat arrays indexed by `Gear.engineId`,
  *  each entry current only while its stamp is this action's (`ctx.actionStamp`), so nothing is
  *  cleared between actions; `by` keeps one count per member (`TeamMember.index`, the enemy last).
  *  Module-level rather than on the State so the stack methods (which have no State in hand) can
@@ -266,7 +300,7 @@ export class GrantRecord {
   }
   /** Record `n` of `gear`, credited to member `who` (-1 for nobody). */
   add(gear: Gear, n: number, who: number): void {
-    const id = gear.id, stamp = ctx.actionStamp;
+    const id = gear.engineId, stamp = ctx.actionStamp;
     if (id >= this.stamp.length) this.grow(id);
     if (this.gearsStamp !== stamp) { this.gearsStamp = stamp; this.gearsLen = 0; }
     if (this.stamp[id] !== stamp) { this.stamp[id] = stamp; this.now[id] = n; this.gears[this.gearsLen++] = gear; }
@@ -277,11 +311,11 @@ export class GrantRecord {
     else this.by[k] = this.by[k]! + n;
   }
   get(gear: Gear): number {
-    const id = gear.id;
+    const id = gear.engineId;
     return id < this.stamp.length && this.stamp[id] === ctx.actionStamp ? this.now[id]! : 0;
   }
   getBy(gear: Gear, who: number): number {
-    const k = gear.id * MEMBERS + who;
+    const k = gear.engineId * MEMBERS + who;
     return k < this.byStamp.length && this.byStamp[k] === ctx.actionStamp ? this.by[k]! : 0;
   }
   /** The Gear recorded this action, in order — `length` of them, the array reused. */
@@ -313,6 +347,17 @@ export const recordConsumed = (gear: Gear, n: number): void => {
 export const pendingQueue: { action: Action; slot: number; by: HeldBuff | null; event: boolean }[] = [];
 
 /** Resolve a marker under `ctx.inResolve`. */
+/** What moved `slot`'s bars (energy as its column reads it, concerto, forte 1-5) outside any row of
+ *  theirs, by whatever is running (`ctx.buff`) unless named: their next row carries it. Trace-only. */
+export function noteBackground(slot: TeamMember, moved: readonly number[], source?: string, owner?: string | null, label?: string): void {
+  if (!moved.some((v) => v !== 0)) return;
+  const by = ctx.buff;
+  slot.background.push({
+    source: source ?? by?.toString() ?? "", owner: owner !== undefined ? owner : (by && ctx.state!.sourceOf.get(by)) ?? slot.name,
+    gains: [...moved, 0, 0], onCast: false, background: true, label,
+  });
+}
+
 export function resolving<T>(f: () => T): T {
   const was = ctx.inResolve;
   ctx.inResolve = true;

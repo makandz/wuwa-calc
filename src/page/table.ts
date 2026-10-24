@@ -3,15 +3,17 @@
  * scroll window over the sorted rows, and every click/change handler for it.
  */
 import { Tier } from "../engine/stats.js";
-import { fmt } from "../display.js";
-import { loadoutName, sequenceLevels, scopedKey, axisUsed, compares, weaponBase, echoLines, echoLabel, axisOpen, AXES } from "../solver.js";
-import type { Member, Combo, Axis, TeamCost, ScopedCompare } from "../solver.js";
-import type { TeamRun } from "../teamrun.js";
+import { fmt } from "./display.js";
+import { loadoutName, sequenceLevels, scopedKey, axisUsed, compares, shownRanks, rankShown, rankValue, weaponBase, echoLines, echoLabel, axisOpen, AXES } from "../solve/solver.js";
+import type { Member, Combo, Axis, TeamCost, ScopedCompare } from "../solve/solver.js";
+import type { TeamRun } from "../solve/teamrun.js";
 import {
   TEAMS,
   filters,
   results,
   visibleRows,
+  setVisibleRows,
+  teamRows,
   ROW_CAP,
   resonatorFilters,
   sequenceFilters,
@@ -22,14 +24,17 @@ import {
   prospectiveRows,
   sequenceTag,
   refineTag,
+  weaponTag,
   syncHash,
   MATRIX_RESONATORS,
+  pinnedRows,
 } from "./model.js";
 import type { ResonatorFilter, OptionKind, TeamRow } from "./model.js";
 import type { SearchKind, SearchHit } from "./filterbar.js";
-import { esc, deferredPop, rect, clearPops, subsLabel, CLICK } from "./panels.js";
+import { esc, deferredPop, rect, zoom, clearPops, subsLabel, CLICK, dropPanel, holdPanels, copyBlock } from "./panels.js";
+import { HOLD, watchTouch, swallowClick, grabDot, makeDot } from "./cellpick.js";
+import type { CopyMode } from "./panels.js";
 import { portrait, loadPortraits } from "./portraits.js";
-
 import { ownership, saveOwnershipPreference } from "../ownership.js";
 
 const app = document.getElementById("app")!;
@@ -56,7 +61,7 @@ addEventListener("keydown", () => {
 /** The refusal a change over `ROW_CAP` gets, popped where the reader asked for it rather than in
  *  the filter bar they may not be looking at. Takes itself down on the next click, key or scroll,
  *  the way a menu does. */
-function rowCapWarning(total: number | null): void {
+export function rowCapWarning(total: number | null): void {
   document.querySelector(".rowcap")?.remove();
   if (total === null) return;
   const pop = document.createElement("div");
@@ -85,8 +90,9 @@ function rowCapWarning(total: number | null): void {
 
 /** Commit one filter change or refuse it: `change` mutates the state and returns its undo, which
  *  runs when the prospective row count would cross `ROW_CAP`. Every way to change a filter goes
- *  through here — clearing a filter can widen the table as much as setting one narrowed it. */
-function withRowCap(change: () => () => void): void {
+ *  through here — clearing a filter can widen the table as much as setting one narrowed it.
+ *  `apply` is what a committed change ends in: the full solve-and-run pass by default. */
+function withRowCap(change: () => () => void, apply: () => void = () => void refresh()): void {
   const undo = change();
   const total = prospectiveRows();
   if (total > ROW_CAP) {
@@ -97,7 +103,19 @@ function withRowCap(change: () => () => void): void {
   }
   rowCapWarning(null);
   syncHash();
-  void refresh();
+  apply();
+}
+
+/** A pin change solves and runs nothing: a pinned row is already on screen and an unpinned one only
+ *  leaves, so the table redraws in place with no overlay — the full pass only for a row never run. */
+function redrawPins(): void {
+  const rows = teamRows();
+  if (!rows.every((row) => results.has(row.key))) {
+    void refresh();
+    return;
+  }
+  setVisibleRows(rows);
+  renderComparison();
 }
 
 /** Turn a resonator's Matrix on or off. Not an axis: it opens no column and adds no row — every
@@ -122,8 +140,7 @@ function setFilter(map: Map<string, ResonatorFilter>, name: string, mode: Resona
 }
 
 /** Toggle a resonator's compare on an axis; turning one off drops gear filters only it could have
- *  set. Refines ride in the Weapon column — that cell's menu is the only way to open them
- *  (`openOptionMenu`), and closing the column closes them with it. */
+ *  set. Closing the Weapon column closes a refines compare with it. */
 function setCompare(name: string, axis: Axis): void {
   withRowCap(() => {
     const on = !filters[axis].includes(name);
@@ -149,6 +166,19 @@ function setCompare(name: string, axis: Axis): void {
   });
 }
 
+/** Pin or unpin one exact row: a pinned row is listed whatever the other filters say. */
+function togglePin(key: string): void {
+  withRowCap(() => {
+    const was = pinnedRows.has(key);
+    if (was) pinnedRows.delete(key);
+    else pinnedRows.add(key);
+    return () => {
+      if (was) pinnedRows.add(key);
+      else pinnedRows.delete(key);
+    };
+  }, redrawPins);
+}
+
 function setScoped(s: ScopedCompare): void {
   withRowCap(() => {
     const key = scopedKey(s);
@@ -164,12 +194,12 @@ function setScoped(s: ScopedCompare): void {
  *  the substat spread appended after these, being the whole build's investment rather than a pick.
  *  Its own list rather than `AXES`: that one is the order a filter set serialises in
  *  (solver.ts's own `filterSignature` and the per-member solve keys), so it cannot be shuffled for
- *  a menu's sake. Refines are absent — they belong to the Weapon column (`openOptionMenu`). */
+ *  a menu's sake. Refines are absent — a weapon's own are compared from its cell (`openOptionMenu`). */
 const MENU_AXES: Axis[] = ["weapons", "sequences", "echoes", "mainstats"];
 
 /** `alt` is what the right button does on this line; without one the right button is inert
  *  there, so a second right press on a menu it just opened leaves the menu standing. */
-interface MenuItem { label: string; run: () => void; alt?: () => void }
+export interface MenuItem { label: string; run: () => void; alt?: () => void }
 
 /** The scoped compares a pick can open: refines on a weapon pick alone, and only where its rank
  *  list has >1 entry; sonatas and main stats where the resonator has options; an echo opens main
@@ -193,8 +223,42 @@ function scopedItems(resonator: string, on: ScopedCompare["on"], value: string):
   }));
 }
 
-/** The menu at the pointer; any other click, a scroll or Escape takes it down. */
-function showMenu(x: number, y: number, items: MenuItem[]): void {
+/** "Show X Rk" for each rank of the weapon member `pos` wears that no otherwise identical row on
+ *  screen runs, and "Stop showing" on a row a shown rank put there. None while every rank is
+ *  compared on that row. Each stands at the row's own chain level alone (`rankValue`). */
+function rankItems(run: TeamRun, pos: number): MenuItem[] {
+  const [m, combo] = [run.members[pos]!, run.combo[pos]!];
+  // the entries standing at this row's level, by the weapon rank they show
+  const here = filters.scoped.filter((s) => s.resonator === m.name && s.on === "rank"
+    && rankShown(s.value).sequence === combo.sequence);
+  const own = here.find((s) => rankShown(s.value).weapon === combo.weapon.name);
+  const stop: MenuItem[] = own ? [{ label: `Stop showing ${combo.weapon.name}`, run: () => setScoped(own) }] : [];
+  if (compares(m, filters, "refines", combo)) return stop;
+  const ranks = m.loadout.refinements.find((r) => r.some((w) => w.name === combo.weapon.name)) ?? [];
+  // a combo key's fifth part is the rank (solver.ts's own `comboOf()`)
+  const unranked = (c: Combo): string => c.key.split(".").filter((_, k) => k !== 4).join(".");
+  const twin = (other: TeamRun): boolean => other.teamKey === run.teamKey
+    && other.combo.every((c, k) => (k === pos ? unranked(c) === unranked(combo) : c.key === run.combo[k]!.key));
+  const shown = new Set([
+    ...(tableView?.sorted ?? []).filter(([, other]) => twin(other)).map(([, other]) => other.combo[pos]!.weapon.name),
+    ...here.map((s) => rankShown(s.value).weapon),
+    combo.weapon.name,
+  ]);
+  return [...ranks.filter((w) => !shown.has(w.name)).map((w) => ({
+    label: `Show ${w.name}`,
+    run: () => setScoped({ resonator: m.name, on: "rank", value: rankValue(w.name, combo.sequence), axis: "refines" }),
+  })), ...stop];
+}
+/** The run a cell's row is and the position `resonator` holds in it, for a menu opened on it. */
+function cellRun(el: HTMLElement, resonator: string): { run: TeamRun; pos: number } | undefined {
+  const run = results.get(el.closest<HTMLElement>(".trow")?.dataset.team ?? "");
+  const pos = run?.members.findIndex((m) => m.name === resonator) ?? -1;
+  return run && pos >= 0 ? { run, pos } : undefined;
+}
+
+/** The menu at the pointer; any other click, a scroll or Escape takes it down, `onClose` after. */
+export function showMenu(x: number, y: number, items: MenuItem[], onClose?: () => void): HTMLElement {
+  document.querySelector(".ctxmenu")?.dispatchEvent(new Event("closemenu"));
   document.querySelector(".ctxmenu")?.remove();
   const menu = document.createElement("div");
   menu.className = "ctxmenu";
@@ -210,6 +274,7 @@ function showMenu(x: number, y: number, items: MenuItem[]): void {
     removeEventListener("contextmenu", onOutside, true);
     removeEventListener("keydown", onKey, true);
     removeEventListener("scroll", close, true);
+    onClose?.();
   };
   /** A press on one of the lines. Bound to the menu itself and live the moment it is on screen,
    *  so the second press of a double lands on the first line however fast it comes — only the
@@ -239,26 +304,36 @@ function showMenu(x: number, y: number, items: MenuItem[]): void {
     addEventListener("keydown", onKey, true);
     addEventListener("scroll", close, true);
   });
+  return menu;
 }
 
 /* ------------------------------------------------------------------------------ the table */
 
 /** A member's name cell: the resonator, then `S?R?` — the name cell's menu offers the level and
- *  rank as filter lines of its own (`openNameMenu`). */
-function memberLabel(m: Member, combo: Combo): string {
-  return [m.mainDps ? loadoutName(m.loadout) : m.name, combo.matrix ? "(Matrix)" : "", `S${combo.sequence}${rankToken(m, combo)}`]
+ *  rank as filter lines of its own (`openNameMenu`). `inCell`: a Weapon cell on this row carries the rank. */
+function memberLabel(m: Member, combo: Combo, inCell: boolean): string {
+  return [m.mainDps ? loadoutName(m.loadout) : m.name, combo.matrix ? "(Matrix)" : "", `S${combo.sequence}${rankToken(m, combo, inCell)}`]
     .filter(Boolean).join(" ");
 }
-/** "" while a Weapon column carries the rank. A signature, any weapon while refines are compared,
- *  and any rank above R1 read their rank — a rank above R1 is one the loadout pinned itself
+/** "" while a Weapon cell carries the rank. A signature, any weapon while refines are compared or a
+ *  rank of it is shown, and any rank above R1 read their rank — a rank above R1 is one the loadout pinned itself
  *  (`BLOODPACTS_PLEDGE[4]`), which is the only way a build runs one. Everything else is at R1 off
  *  its whole refinement list, where only a signature costs anything: a craftable or a standard
  *  weapon there is the "no signature" build and reads R0. */
-const rankToken = (m: Member, combo: Combo): string =>
-  axisUsed(m, filters, "weapons") ? ""
-  : compares(m, filters, "refines", combo) || combo.weapon.refinement > 1
-    || combo.weapon.tier === Tier.Limited ? `R${combo.weapon.refinement}`
+const rankToken = (m: Member, combo: Combo, inCell: boolean): string =>
+  inCell ? ""
+  : compares(m, filters, "refines", combo) || combo.weapon.refinement > 1 || combo.weapon.tier === Tier.Limited
+    || shownRanks(m, filters).some(([w, , s]) => weaponBase(m.loadout.weapons[w]!) === weaponBase(combo.weapon)
+      && s === combo.sequence) ? `R${combo.weapon.refinement}`
   : "R0";
+
+const PIN_MARK = `<svg class="pinmark" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 9V4h1a1 1 0 0 0 0-2H7a1 1 0 0 0 0 2h1v5a3 3 0 0 1-3 3v2h5.97v7l1 1 1-1v-7H19v-2a3 3 0 0 1-3-3z"/></svg>`;
+/** The row's Pin toggle: lit while the row is pinned (`pinnedRows`). */
+const pinCell = (key: string): string => {
+  const on = pinnedRows.has(key);
+  return `<div class="c pin${on ? " on" : ""}" data-pin="${esc(key)}"`
+    + ` title="${CLICK} to ${on ? "unpin this row" : "pin this row, shown whatever the other filters say"}">${PIN_MARK}</div>`;
+};
 
 /** A gear pick cell; `data-kind`/`data-value` are what the click handlers filter on. Empty when
  *  the axis is open at this position but not for this member. */
@@ -283,10 +358,10 @@ const cmpDrawn = new Set<string>();
 export let teamMode: "dpr" | "dps" = "dpr";
 const TEAM_HEAD = { dpr: "Team Avg DPR", dps: "Team DPS" };
 const wholeDamage = (run: TeamRun): number => run.sectionTotals.reduce((a, b) => a + b, 0);
-const teamFigure = (run: TeamRun): number =>
+export const teamFigure = (run: TeamRun): number =>
   Math.floor(wholeDamage(run) / (teamMode === "dpr" ? Math.max(1, run.sectionTotals.length) : run.seconds));
 /** One member's share of those sections, always per section whatever the team column reads. */
-const personalFigure = (run: TeamRun, name: string): number =>
+export const personalFigure = (run: TeamRun, name: string): number =>
   Math.floor(run.sectionBySlot.reduce((a, by) => a + (by.get(name) ?? 0), 0) / Math.max(1, run.sectionTotals.length));
 /** Beside DPR, the last rotation's length as a dimmed subscript — plain for the sizing row. DPS
  *  reads alone. */
@@ -295,7 +370,7 @@ const teamText = (run: TeamRun): string => fmt(teamFigure(run)) + (teamMode === 
 const teamHtml = (run: TeamRun): string =>
   fmt(teamFigure(run)) + (teamMode === "dpr" ? `<sub class="looptime">${loopTime(run)}</sub>` : "");
 /** A compare's share, one decimal truncated — never rounded up to a gain it didn't make. */
-const pctTrunc = (ratio: number): string => `${fmt(Math.trunc(ratio * 1000) / 10, 1, true)}%`;
+export const pctTrunc = (ratio: number): string => `${fmt(Math.trunc(ratio * 1000) / 10, 1, true)}%`;
 
 interface TableView {
   sorted: (readonly [string, TeamRun])[];
@@ -334,12 +409,14 @@ function comparisonTable(rows: TeamRow[]): string {
     (_, p) => p[4]!,
     (_, p) => p[1]!,
   ];
+  // pinned rows stand above the rest, grouped and ordered among themselves as the rest are
   const keyed = rows.map((row) => {
     const run = results.get(row.key)!;
+    const pinned = pinnedRows.has(row.key);
     const parts = run.combo.map((c) => c.key.split("."));
-    const keys = [run.teamKey];
+    const keys = [`${pinned ? "pin|" : ""}${run.teamKey}`];
     for (const level of LEVELS) keys.push(`${keys[keys.length - 1]}|${run.combo.map((c, i) => level(c, parts[i]!)).join("-")}`);
-    return { pair: [row.key, run] as const, run, keys };
+    return { pair: [row.key, run] as const, run, keys, pinned };
   });
   const groupBest = new Map<string, TeamRun>();
   for (const { run, keys } of keyed) for (const k of keys) {
@@ -347,6 +424,7 @@ function comparisonTable(rows: TeamRow[]): string {
     if (!held || teamFigure(run) > teamFigure(held)) groupBest.set(k, run);
   }
   const sorted = keyed.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
     for (let i = 0; i < a.keys.length; i++) {
       const [ka, kb] = [a.keys[i]!, b.keys[i]!];
       if (ka === kb) continue;
@@ -424,6 +502,25 @@ function comparisonTable(rows: TeamRow[]): string {
       else openAt[axis][pos] = false;
     });
   }
+  // a shown rank on a weapon other than the row's own default puts a second weapon in that team's
+  // rows, so the Weapon column opens on them — without a Compare, there being no weapon compare
+  const worn = new Map<string, Set<string>>();
+  for (const row of rows) {
+    row.members.forEach((m, pos) => {
+      if (axisOpen(m, filters, "weapons") || !shownRanks(m, filters).length) return;
+      const key = `${row.teamKey}|${pos}`;
+      worn.set(key, (worn.get(key) ?? new Set()).add(weaponBase(row.combo[pos]!.weapon)));
+    });
+  }
+  const multiWeapon = new Set([...worn].filter(([, seen]) => seen.size > 1).map(([key]) => key));
+  for (const key of multiWeapon) {
+    const pos = Number(key.slice(key.lastIndexOf("|") + 1));
+    if (!openAt.weapons[pos]) soloWeapon[pos] = true;
+    openAt.weapons[pos] = true;
+  }
+  /** Whether this row's member at `pos` has a Weapon cell of their own. */
+  const weaponCell = (run: TeamRun, m: Member, pos: number): boolean =>
+    axisOpen(m, filters, "weapons") || multiWeapon.has(`${run.teamKey}|${pos}`);
   /** Whether this axis draws a Compare cell at this position — every open column does, bar the two
    *  that have nothing to measure: a Weapon column standing on one weapon, and a refine one beside
    *  a Weapon Compare that already measures against R1. */
@@ -465,22 +562,29 @@ function comparisonTable(rows: TeamRow[]): string {
       }
     });
   }
-  // the baseline: the best twin wearing the axis's own baseline (a non-limited weapon at the rank
-  // the cost hands out — R5 under an R5 cost — any sonata/main stat, the default subs, the lowest
-  // chain level), on-screen twins preferred
+  // the baseline: the best twin wearing the axis's own baseline — the weapon picked below at the
+  // rank the cost hands out (R5 under an R5 cost), any sonata/main stat, the default subs, the
+  // lowest chain level — on screen or run by the solver beside them
+  // a shown rank puts other ranks beside the row as a rank compare does, so it reads the same way
+  const ranked = (m: Member): boolean => axisUsed(m, filters, "refines") || shownRanks(m, filters).length > 0;
   const bestOf = (pool: { combo: Combo; dpr: number }[], run: TeamRun, pos: number, axis: CmpAxis): number => {
+    // the loadout's leftmost standard weapon, the one it runs with no signature (CLAUDE.md), where
+    // the table shows it; else the best standard one; with none, `gearRatio` falls to the worst
+    const shownWeapons = axis === "weapons" ? [...offeredAt.get(`weapons|${pos}|${run.teamKey}`) ?? []].map((n) => n.replace(/ R\d$/, "")) : [];
+    const leftmost = run.members[pos]!.loadout.weapons.find((w) => w.tier !== Tier.Limited);
+    const baseWeapon = leftmost && shownWeapons.includes(weaponBase(leftmost)) ? leftmost : undefined;
     let base = -Infinity;
     for (const t of pool) {
       if (axis === "weapons") {
-        if (t.combo.weapon.tier === Tier.Limited) continue;
+        if (t.combo.weapon.tier === Tier.Limited || (baseWeapon && weaponBase(t.combo.weapon) !== weaponBase(baseWeapon))) continue;
         // with no rank column every twin already runs at the cost's rank; with one, lower ranks
         // share the pool and R1 is the baseline
-        if (axisUsed(run.members[pos]!, filters, "refines") && t.combo.key.split(".")[4] !== "r0") continue;
+        if (ranked(run.members[pos]!) && t.combo.key.split(".")[4] !== "r0") continue;
       }
       if (axis === "refines" && t.combo.key.split(".")[4] !== "r0") continue;
       if (axis === "substats" && t.combo.highSubs) continue;
       if (axis === "sequences" && (t.combo.sequence !== sequenceLevels(run.members[pos]!, filters)[0]
-        || (!axisUsed(run.members[pos]!, filters, "refines") && t.combo.key.split(".")[4] !== "r0"))) continue;
+        || (!ranked(run.members[pos]!) && t.combo.key.split(".")[4] !== "r0"))) continue;
       if (t.dpr > base) base = t.dpr;
     }
     return base;
@@ -490,10 +594,10 @@ function comparisonTable(rows: TeamRow[]): string {
     const all = twins.get(twinKey(run, pos, axis)) ?? [];
     const shown = all.filter((t) => t.shown);
     const offered = all.filter((t) => t.offered);
-    for (const pool of [shown, offered]) {
-      const base = bestOf(pool, run, pos, axis);
-      if (base > 0) return dpr / base;
-    }
+    // a hidden twin counts as much as one on screen: a standard weapon run on this row's own sets
+    // can beat every one the table lists on them (another's row settling on other sets)
+    const base = bestOf([...shown, ...offered], run, pos, axis);
+    if (base > 0) return dpr / base;
     // ...and with the baseline itself filtered away the weakest option still on the table takes its
     // place, so the column reads against something on screen rather than a row nobody can see
     const left = shown.length ? shown : offered;
@@ -525,19 +629,20 @@ function comparisonTable(rows: TeamRow[]): string {
       // the level and rank ride on the name cell as filter tags wherever the rows differ on them;
       // with a Weapon column open the rank is that cell's business
       const seqTag = sequenceTag(m, combo);
-      const refTag = axisUsed(m, filters, "refines") && !openAt.weapons[i] ? refineTag(m, combo) : null;
+      const inCell = weaponCell(run, m, i);
+      const refTag = axisUsed(m, filters, "refines") && !inCell ? refineTag(m, combo) : null;
       const name = `<div class="c name res" data-resonator="${esc(m.name)}"`
         + (seqTag ? ` data-sequence="${esc(seqTag)}" data-seq-gate="${combo.sequence}"` : "")
         + (refTag ? ` data-refine="${esc(refTag)}" data-ref-gate="${combo.weapon.refinement}"` : "")
         + ` style="--mem:${m.color};color:${m.color}">`
-        + portrait(m.name) + `<span class="res-label">${esc(memberLabel(m, combo))}</span>`
+        + portrait(m.name) + `<span class="res-label">${esc(memberLabel(m, combo, inCell))}</span>`
         + `</div>`;
       const dpr = dprAt(i) ? `<div class="c num slotdpr" style="--mem:${m.color}">${fmt(personalFigure(run, m.name))}</div>` : "";
       const seqCmp = cmpAt("sequences", i) ? `<div class="c num slotcompare" style="--mem:${m.color}">${axisOpen(m, filters, "sequences") ? gearCompare(run, i, "sequences") : ""}</div>` : "";
       const refCmp = cmpAt("refines", i) ? `<div class="c num slotcompare" style="--mem:${m.color}">${compares(m, filters, "refines", combo) ? gearCompare(run, i, "refines") : ""}</div>` : "";
       const gear = GEAR_AXES.map((axis) => {
         if (!openAt[axis][i]) return "";
-        const open = showsRow(m, axis, combo);
+        const open = axis === "weapons" ? inCell : showsRow(m, axis, combo);
         const cell = axis === "weapons" ? optionCell("weapon", open ? combo.weapon.name : "", m.color, [combo.weapon.name], m.name)
           : axis === "echoes" ? optionCell("echo", open ? echoLabel(m.loadout, combo.echo) : "", m.color, open ? echoLines(m.loadout, combo.echo) : [], m.name)
           // Neither a main-stat roll nor a substat spread is ever filtered on — they reach nobody
@@ -553,6 +658,7 @@ function comparisonTable(rows: TeamRow[]): string {
     const memberCells = run.members.map((m, i) => memberCell(m, run.combo[i]!, i)).join("");
     return `<div class="trow${rank.pinned ? " isbaseline" : ""}" style="--hue:${rank.hue}" data-team="${esc(key)}" data-team-key="${esc(run.teamKey)}"`
       + ` data-members="${esc(memberNames)}" data-total="${grand}">`
+      + pinCell(key)
       + memberCells
       + `<div class="c num total teamdpr" title="${CLICK} to view the team's damage breakdown"${deferredPop("dpr", key)}>${teamHtml(run)}</div>`
       + `<div class="c num total baseline" data-team="${esc(key)}" title="${CLICK} to measure every team against this one">${rank.pct}</div>`
@@ -567,6 +673,7 @@ function comparisonTable(rows: TeamRow[]): string {
     + GEAR_AXES.map((axis) => (openAt[axis][i] ? `<div class="c">${AXIS_HEAD[axis]}</div>${cmpAt(axis, i) ? `<div class="c num">Compare</div>` : ""}` : "")).join("")
     + (dprAt(i) ? `<div class="c num">Personal</div>` : "");
   const head = `<div class="trow thead">`
+    + `<div class="c pinhead">Pin</div>`
     + memberHead(3, 0) + memberHead(2, 1) + memberHead(1, 2)
     + `<div class="c num dprhead" title="${CLICK} to switch between DPR and DPS">${TEAM_HEAD[teamMode]}</div>`
     + `<div class="c num huehead" title="${CLICK} to colour the column by rank">Compare</div>`
@@ -575,7 +682,7 @@ function comparisonTable(rows: TeamRow[]): string {
 
   // one grid track per column rendered above, position by position
   const posCols = (i: number) => `max-content${cmpAt("sequences", i) ? " max-content" : ""}${cmpAt("refines", i) ? " max-content" : ""}${GEAR_AXES.map((axis) => (openAt[axis][i] ? ` max-content${cmpAt(axis, i) ? " max-content" : ""}` : "")).join("")}${dprAt(i) ? " max-content" : ""}`;
-  const gridStyle = `grid-template-columns:${posCols(0)} ${posCols(1)} ${posCols(2)} max-content max-content max-content`;
+  const gridStyle = `grid-template-columns:max-content ${posCols(0)} ${posCols(1)} ${posCols(2)} max-content max-content max-content`;
 
   const rowLines = (run: TeamRun): number => Math.max(1, ...run.members.map((m, i) =>
     (openAt.echoes[i] && axisOpen(m, filters, "echoes")) ? echoLines(m.loadout, run.combo[i]!.echo).length : 1));
@@ -597,16 +704,16 @@ function comparisonTable(rows: TeamRow[]): string {
   sorted.forEach(([, run], i) => {
     run.members.forEach((m, pos) => {
       const combo = run.combo[pos]!;
-      wide.name[pos] = widest(wide.name[pos]!, memberLabel(m, combo));
+      wide.name[pos] = widest(wide.name[pos]!, memberLabel(m, combo, weaponCell(run, m, pos)));
       wide.dpr[pos] = widest(wide.dpr[pos]!, fmt(personalFigure(run, m.name)));
       if (axisOpen(m, filters, "sequences")) wide.seqcmp[pos] = widest(wide.seqcmp[pos]!, gearCompare(run, pos, "sequences"));
       if (compares(m, filters, "refines", combo)) wide.refcmp[pos] = widest(wide.refcmp[pos]!, gearCompare(run, pos, "refines"));
       for (const axis of GEAR_AXES) {
-        if (!showsRow(m, axis, combo)) continue;
+        if (!(axis === "weapons" ? weaponCell(run, m, pos) : showsRow(m, axis, combo))) continue;
         const text = axis === "weapons" ? [combo.weapon.name] : axis === "echoes" ? echoLines(m.loadout, combo.echo)
           : axis === "mainstats" ? [combo.mainstat.name] : [subsLabel(combo)];
         for (const line of text) wide.gear[axis][pos] = widest(wide.gear[axis][pos]!, line);
-        wide.cmp[axis][pos] = widest(wide.cmp[axis][pos]!, gearCompare(run, pos, axis));
+        if (showsRow(m, axis, combo)) wide.cmp[axis][pos] = widest(wide.cmp[axis][pos]!, gearCompare(run, pos, axis));
       }
     });
     wide.total = widest(wide.total, teamText(run));
@@ -623,6 +730,7 @@ function comparisonTable(rows: TeamRow[]): string {
   // no `.teamdpr` on the ghost's Total cell: `drawWindow()` measures the row pitch off it
   // the heading is as wide as the figures under it can be too
   const ghost = (): string => `<div class="trow tghost" aria-hidden="true">`
+    + `<div class="c pin">${PIN_MARK}</div>`
     + ghostPos(0) + ghostPos(1) + ghostPos(2)
     + `<div class="c num total">${esc(widest(wide.total, TEAM_HEAD[teamMode]))}</div>`
     + `<div class="c num total baseline">${esc(wide.pct)}</div>`
@@ -726,6 +834,328 @@ export function drawWindow(force = false, scrollTop?: number): void {
   }
 }
 
+/* ------------------------------------------------------------------------------ cell block */
+
+/** A block of cells picked out: rows index the sorted table (-1 the heading), columns are tracks.
+ *  `touch` gives it the dot (cellpick.ts). */
+interface Block { ar: number; ac: number; r0: number; r1: number; c0: number; c1: number; touch: boolean }
+let block: Block | null = null;
+let blockBox: HTMLElement | null = null;
+let blockDot: HTMLElement | null = null;
+/** The edges the dot sits on while it is dragged; null, the block's own bottom-right. */
+let dotAt: [number, number] | null = null;
+/** A mouse press that picked its cell: when, and whether it reached another — a click or a hold. */
+let blockPress: { at: number; scale: number; moved: boolean } | null = null;
+let blocking = false;
+let bx = 0, by = 0;
+/** The two copy buttons under a finished block (`showCopyMenu`). */
+let copyMenu: HTMLElement | null = null;
+/** What Ctrl+C copies as: the last of those two buttons pressed, kept across reloads — Discord
+ *  until one is. */
+const COPY_MODE_KEY = "wuwa.copyMode";
+let copyMode: CopyMode = "discord";
+try {
+  if (localStorage.getItem(COPY_MODE_KEY) === "sheets") copyMode = "sheets";
+} catch { /* no storage */ }
+
+const rowTopOf = (i: number): number => i * rowHeight + tableView!.extra[i]! * lineHeight;
+
+function clearBlock(): void {
+  block = null;
+  dotAt = null;
+  blockBox?.remove();
+  blockBox = null;
+  blockDot?.remove();
+  blockDot = null;
+  copyMenu?.remove();
+  copyMenu = null;
+}
+
+/** The cell pressed, where a block can hold it: never Pin (the first track) or the rotation link (the last). */
+function pickable(target: Element): Element | null {
+  const cell = target.closest?.(".tgrid .c");
+  const row = cell?.parentElement;
+  if (!cell || !row) return null;
+  const at = [...row.children].indexOf(cell);
+  return at > 0 && at < row.children.length - 1 ? cell : null;
+}
+
+/** The row and track under page point `x`/`y`: the heading wherever it is pinned, else the row its
+ *  height puts there. */
+function blockCellAt(grid: HTMLElement, x: number, y: number): [number, number] {
+  const heads = [...grid.querySelectorAll(".thead > .c")].map(rect);
+  // Pin (the first track) is never in a block: a drag over it stops at the column beside it
+  let col = 1;
+  while (col < heads.length - 1 && x >= heads[col + 1]!.left) col++;
+  const head = heads[0]!;
+  if (y < head.bottom) return [-1, col];
+  const at = y - rect(grid).top - head.height;
+  let lo = 0, hi = tableView!.sorted.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (rowTopOf(mid) <= at) lo = mid;
+    else hi = mid - 1;
+  }
+  return [lo, col];
+}
+
+/** The row and track edges nearest page point `x`/`y` (cellpick.ts's `DotGrid`), from the heading's
+ *  top (-1, unpinned) to the last row's bottom, and from Pin's right to the rotation link's left. */
+function blockEdgeAt(grid: HTMLElement, x: number, y: number): [number, number] {
+  const heads = [...grid.querySelectorAll(".thead > .c")].map(rect);
+  const n = tableView!.sorted.length;
+  const at = y - rect(grid).top;
+  const edgeY = (e: number): number => (e < 0 ? 0 : heads[0]!.height + rowTopOf(e));
+  let lo = -1, hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (edgeY(mid) <= at) lo = mid;
+    else hi = mid - 1;
+  }
+  const row = lo < n && edgeY(lo + 1) - at < at - edgeY(lo) ? lo + 1 : lo;
+  let col = 1;
+  for (let c = 2; c < heads.length; c++) if (Math.abs(heads[c]!.left - x) < Math.abs(heads[col]!.left - x)) col = c;
+  return [row, col];
+}
+
+/** The copy buttons' gap (px) under the outline, as the hover panels', and the further drop past the dot. */
+const MENU_GAP = 4, DOT_CLEAR = 6;
+
+/** Draw the block's outline over its cells, inside the table's wrap — the grid itself is redrawn
+ *  under every scroll window. The heading is outlined where it sits unpinned. */
+function paintBlock(): void {
+  const wrap = app.querySelector<HTMLElement>(".tcwrap");
+  const grid = wrap?.querySelector<HTMLElement>(".tgrid");
+  if (!block || !wrap || !grid) return;
+  const heads = [...grid.querySelectorAll(".thead > .c")].map(rect);
+  const w = rect(wrap), g = rect(grid);
+  const y = (i: number): number => (i < 0 ? 0 : heads[0]!.height + rowTopOf(i));
+  if (!blockBox?.isConnected) {
+    blockBox = wrap.appendChild(document.createElement("div"));
+    blockBox.className = "cellbox";
+  }
+  const top = g.top - w.top + y(block.r0);
+  blockBox.style.left = `${heads[block.c0]!.left - w.left}px`;
+  blockBox.style.top = `${top}px`;
+  blockBox.style.width = `${heads[block.c1]!.right - heads[block.c0]!.left}px`;
+  blockBox.style.height = `${g.top - w.top + y(block.r1 + 1) - top}px`;
+  // the dot rides the corner being dragged, the bottom-right at rest
+  if (block.touch) {
+    if (!blockDot?.isConnected) blockDot = makeDot(wrap, grabBlockDot);
+    const [r, c] = dotAt ?? [block.r1 + 1, block.c1 + 1];
+    blockDot.style.left = `${heads[c]!.left - w.left}px`;
+    blockDot.style.top = `${g.top - w.top + y(r)}px`;
+  }
+  // the copy buttons hang under the block's bottom edge, flush with its right one
+  if (copyMenu) {
+    copyMenu.style.left = `${heads[block.c1]!.right - w.left - copyMenu.offsetWidth}px`;
+    copyMenu.style.top = `${g.top - w.top + y(block.r1 + 1) + MENU_GAP + (block.touch ? DOT_CLEAR : 0)}px`;
+  }
+}
+
+/** Under a finished block holding any column but Pin and the rotation link: Copy to Sheets and Copy
+ *  to Discord, each copying the block and becoming what Ctrl+C copies as from then on. */
+function showCopyMenu(): void {
+  const wrap = app.querySelector<HTMLElement>(".tcwrap");
+  const tracks = app.querySelectorAll(".tgrid .thead > .c").length;
+  // Pin is the first track and the rotation link the last, and neither is ever copied
+  if (!block || !wrap || block.c1 < 1 || block.c0 > tracks - 2) return;
+  copyMenu?.remove();
+  const item = (mode: CopyMode, label: string): string =>
+    `<button type="button" class="ctxitem" data-copy="${mode}">${label}</button>`;
+  copyMenu = wrap.appendChild(document.createElement("div"));
+  copyMenu.className = "copymenu";
+  copyMenu.innerHTML = item("sheets", "Copy to Sheets") + item("discord", "Copy to Discord");
+  paintBlock();
+}
+
+/** A block of rows over the Compare column measures it against its bottom row; one Compare cell's
+ *  own click sets the baseline itself. */
+function measureFromBlock(grid: HTMLElement): void {
+  if (!block || block.r1 <= block.r0 || !tableView) return;
+  const compare = [...grid.querySelectorAll(".thead > .c")].findIndex((c) => c.classList.contains("huehead"));
+  const bottom = tableView.sorted[block.r1]?.[0];
+  if (bottom && block.c0 <= compare && compare <= block.c1 && baselineTeam !== bottom) {
+    baselineTeam = bottom;
+    tableView.ranks = rankAll(tableView.sorted);
+    drawWindow(true);
+  }
+}
+
+function trackTableBlock(): void {
+  const grid = app.querySelector<HTMLElement>(".tgrid");
+  if (!blocking || !grid || !tableView?.sorted.length) return;
+  const [row, col] = blockCellAt(grid, bx, by);
+  if (!block) block = { ar: row, ac: col, r0: row, r1: row, c0: col, c1: col, touch: false };
+  if ((row !== block.ar || col !== block.ac) && blockPress) blockPress.moved = true;
+  block.r0 = Math.min(block.ar, row);
+  block.r1 = Math.max(block.ar, row);
+  block.c0 = Math.min(block.ac, col);
+  block.c1 = Math.max(block.ac, col);
+  measureFromBlock(grid);
+  paintBlock();
+}
+
+let blockRaf = 0;
+const queueBlock = (): void => {
+  if (blockRaf) return;
+  blockRaf = requestAnimationFrame(() => {
+    blockRaf = 0;
+    trackTableBlock();
+  });
+};
+
+/** Pick the cell a finger picked out (cellpick.ts's `watchTouch`), dot and all. */
+function pickTouched(row: number, col: number): void {
+  clearBlock();
+  block = { ar: row, ac: col, r0: row, r1: row, c0: col, c1: col, touch: true };
+  paintBlock();
+}
+
+/** The dot pressed: the block's far corner follows the finger, the copy buttons back on release. */
+function grabBlockDot(e: PointerEvent): void {
+  const grid = app.querySelector<HTMLElement>(".tgrid");
+  const held = block;
+  if (!grid || !held) return;
+  copyMenu?.remove();
+  copyMenu = null;
+  grabDot(e, {
+    grid,
+    corners: () => [[held.r0, held.c0], [held.r1 + 1, held.c1 + 1]],
+    edgeAt: (x, y) => blockEdgeAt(grid, x, y),
+    edgePoint: (r, c) => {
+      const heads = [...grid.querySelectorAll(".thead > .c")].map(rect);
+      return [heads[c]!.left, rect(grid).top + (r < 0 ? 0 : heads[0]!.height + rowTopOf(r))];
+    },
+    limits: () => [[-1, 1], [tableView!.sorted.length, grid.querySelectorAll(".thead > .c").length - 1]],
+    aim: (from, to) => {
+      const [r0, r1] = from[0] <= to[0] ? [from[0], to[0]] : [to[0], from[0]];
+      const [c0, c1] = from[1] <= to[1] ? [from[1], to[1]] : [to[1], from[1]];
+      dotAt = to;
+      block = { ar: r0, ac: c0, r0, r1: r1 - 1, c0, c1: c1 - 1, touch: true };
+      paintBlock();
+    },
+    done: () => {
+      dotAt = null;
+      measureFromBlock(grid);
+      showCopyMenu();
+    },
+  });
+}
+
+/** A mouse picks its cell on the press: a quick release there is a click (its menu opens), a hold or
+ *  drag a block (copy buttons). A finger: tap = pick + menu, long press = pick + copy buttons. */
+addEventListener("pointerdown", (e) => {
+  const target = e.target as Element;
+  // the copy buttons and the dot work on the block standing
+  if (target.closest?.(".copymenu, .celldot")) return;
+  const cell = pickable(target);
+  const grid = app.querySelector<HTMLElement>(".tgrid");
+  if (e.pointerType === "touch") {
+    if (!cell || !grid || !tableView?.sorted.length) {
+      watchTouch(e, null, clearBlock);
+      return;
+    }
+    const scale = zoom();
+    const [row, col] = blockCellAt(grid, e.clientX / scale, e.clientY / scale);
+    watchTouch(e, cell, () => pickTouched(row, col), () => {
+      pickTouched(row, col);
+      showCopyMenu();
+    });
+    return;
+  }
+  clearBlock();
+  if (e.button !== 0 || !cell || !grid || !tableView?.sorted.length) return;
+  const scale = zoom();
+  blockPress = { at: performance.now(), scale, moved: false };
+  [bx, by] = [e.clientX / scale, e.clientY / scale];
+  blocking = true;
+  dropPanel();
+  holdPanels(true);
+  trackTableBlock();
+});
+addEventListener("pointermove", (e) => {
+  if (!blockPress || e.pointerType === "touch") return;
+  bx = e.clientX / blockPress.scale;
+  by = e.clientY / blockPress.scale;
+  queueBlock();
+});
+const endBlockPress = (e: PointerEvent): void => {
+  const press = blockPress;
+  if (!press || e.pointerType === "touch") return;
+  if (blockRaf) {
+    cancelAnimationFrame(blockRaf);
+    blockRaf = 0;
+    trackTableBlock();
+  }
+  blockPress = null;
+  blocking = false;
+  holdPanels(false);
+  // a quick press that never left its cell was a click: its click goes on
+  if (!press.moved && performance.now() - press.at < HOLD) return;
+  showCopyMenu();
+  swallowClick();
+};
+addEventListener("pointerup", endBlockPress);
+addEventListener("pointercancel", endBlockPress);
+addEventListener("scroll", () => {
+  if (blocking) queueBlock();
+}, true);
+
+/** A cell's text as it reads: an echo cell's lines joined, the loop time and arrows left off. */
+const cellText = (c: Element): string => {
+  c.querySelectorAll("sub, .arrow").forEach((el) => el.remove());
+  c.querySelectorAll("br").forEach((br) => br.replaceWith(" / "));
+  return (c.textContent ?? "").trim();
+};
+
+/** Copy the block as `mode`, a row to a line — rows off the scroll window are drawn for it on the
+ *  side. The Pin and rotation-link columns (the first and last tracks) are left out, headings and all.
+ *  For Sheets, DPR's rotation time is a column of its own beside it, in plain seconds. */
+function copyTableBlock(mode: CopyMode): void {
+  const view = tableView;
+  const tracks = app.querySelectorAll(".tgrid .thead > .c").length;
+  if (!block || !view) return;
+  const c0 = Math.max(block.c0, 1), c1 = Math.min(block.c1, tracks - 2);
+  if (c0 > c1) return;
+  const tpl = document.createElement("template");
+  const lines: string[][] = [];
+  for (let i = block.r0; i <= block.r1; i++) {
+    const at = view.sorted[i];
+    tpl.innerHTML = i < 0 ? view.head : view.rowHtml(at![0], at![1], view.ranks[i]!);
+    const cells = [...tpl.content.firstElementChild!.children].slice(c0, c1 + 1);
+    lines.push(cells.flatMap((c) => {
+      if (mode !== "sheets" || teamMode !== "dpr") return [cellText(c)];
+      if (c.classList.contains("dprhead")) return [cellText(c), "Loop Time"];
+      if (!c.classList.contains("teamdpr")) return [cellText(c)];
+      const time = (c.querySelector(".looptime")?.textContent ?? "").replace(/s$/, "");
+      return [cellText(c), time];
+    }));
+  }
+  copyBlock(lines, mode);
+}
+
+/** Ctrl+C copies the block as the copy button pressed last did. */
+addEventListener("keydown", (e) => {
+  if (e.key === "Escape") clearBlock();
+  if (!block || !tableView || e.key !== "c" || !(e.ctrlKey || e.metaKey) || e.altKey || !app.querySelector(".tgrid")) return;
+  const loose = getSelection();
+  if (loose && !loose.isCollapsed) return;
+  e.preventDefault();
+  copyTableBlock(copyMode);
+});
+document.addEventListener("click", (e) => {
+  const mode = (e.target as Element).closest<HTMLElement>(".copymenu .ctxitem")?.dataset.copy as CopyMode | undefined;
+  if (!mode) return;
+  copyMode = mode;
+  try {
+    localStorage.setItem(COPY_MODE_KEY, mode);
+  } catch { /* no storage */ }
+  copyTableBlock(mode);
+  copyMenu?.remove();
+  copyMenu = null;
+});
+
 /** Beside the table the aside must not set the page's height: its own height is taken back off
  *  as a negative bottom margin, so the table alone decides. */
 const sideFit = new ResizeObserver((entries) => {
@@ -807,6 +1237,7 @@ export function renderComparison(): void {
   topbar.hidden = true;
   clearPops();
   const scrollTop = app.querySelector(".tgrid") ? (app.querySelector("main")?.scrollTop ?? 0) : tableScrollTop;
+  clearBlock();
   app.innerHTML = comparisonTable(visibleRows);
   loadPortraits(app);
   app.className = "";
@@ -824,7 +1255,7 @@ export function renderComparison(): void {
   focusAfterDraw = undefined;
   if (back !== undefined) {
     const chip = back === null ? undefined
-      : [...app.querySelectorAll<HTMLElement>(".tcchips .rchip, .tcchips .clearall")].find((el) => chipSig(el) === back);
+      : [...app.querySelectorAll<HTMLElement>(CHIP_RING)].find((el) => chipSig(el) === back);
     if (chip) chip.focus({ preventScroll: true }); else focusSearch();
   }
   let queued = false;
@@ -839,6 +1270,10 @@ export function renderComparison(): void {
 
 addEventListener("resize", () => { fitSide(); drawWindow(true); });
 
+document.addEventListener("click", (e) => {
+  const key = (e.target as Element).closest<HTMLElement>(".c.pin")?.dataset.pin;
+  if (key) togglePin(key);
+});
 document.addEventListener("click", (e) => {
   const el = (e.target as Element).closest<HTMLElement>(".c.baseline");
   if (el?.dataset.team) setBaseline(el.dataset.team);
@@ -890,6 +1325,7 @@ document.addEventListener("change", (e) => {
  *  the resonator and nothing has to be read past to reach it. */
 const openNameMenu = (el: HTMLElement, x: number, y: number): void => {
   const resonator = el.dataset.resonator ?? "";
+  const row = cellRun(el, resonator);
   const compareItem = (axis: Axis): MenuItem => ({
     label: `${filters[axis].includes(resonator) ? "Stop comparing" : "Compare"} ${resonator} ${AXIS_LABEL[axis].toLowerCase()}`,
     run: () => setCompare(resonator, axis),
@@ -913,12 +1349,14 @@ const openNameMenu = (el: HTMLElement, x: number, y: number): void => {
     // it is the one that says how the whole build is invested rather than which pick it wears.
     // A kit with no chain nodes yet says so where its sequence compare would sit, and the line
     // does nothing when pressed.
-    // refines are not among them: they belong to the Weapon column, and are opened from a weapon
-    // cell once that column is up (`openOptionMenu`)
+    // refines are not among them: a weapon's are compared from its own cell (`openOptionMenu`),
+    // and a rank shown one at a time below
     ...MENU_AXES.flatMap((axis) => (comparable(resonator, axis) ? [compareItem(axis)]
       : axis === "sequences" ? [{ label: "Sequences Not Implemented!", run: () => {} }] : [])),
     ...(comparable(resonator, "substats") ? [compareItem("substats")] : []),
     ...scopedBlock(el.dataset.sequence, "sequence", el.dataset.seqGate ?? "", sequenceFilters),
+    // with no weapon compare the row's own weapon takes its other ranks from here
+    ...(row && !axisOpen(row.run.members[row.pos]!, filters, "weapons") ? rankItems(row.run, row.pos) : []),
     ...scopedBlock(el.dataset.refine, "refine", el.dataset.refGate ?? "", refineFilters),
     // last of all, and only for a kit that has a Matrix at all
     ...(MATRIX_RESONATORS.has(resonator) ? [{
@@ -957,30 +1395,33 @@ const openOptionMenu = (e: MouseEvent): void => {
   const el = (e.target as Element).closest<HTMLElement>(".c.option")!;
   const kind = el.dataset.kind as OptionKind;
   const resonator = el.dataset.resonator ?? "";
+  const row = cellRun(el, resonator);
   const base = kind === "weapon" ? key.replace(/ R\d$/, "") : key;
+  // a weapon filters as the member wearing it, at the level they wear it at (`weaponTag`)
+  const tag = (name: string): string => (kind === "weapon" && row
+    ? weaponTag(row.run.members[row.pos]!, row.run.combo[row.pos]!.sequence, name) : name);
   const ranked = kind === "weapon" && (filters.refines.includes(resonator)
     || filters.scoped.some((s) => s.resonator === resonator && s.axis === "refines"));
   const axis = kind === "weapon" ? "weapons" : "echoes";
   const word = kind === "weapon" ? "weapons" : "sonatas";
   const items: MenuItem[] = [
     // the pick's own filters lead, so "Show only" is the top line whatever else the cell offers
-    { label: `Show only ${base}`, run: () => setFilter(map, base, "include"), alt: () => setFilter(map, base, "exclude") },
-    { label: `Hide ${base}`, run: () => setFilter(map, base, "exclude") },
+    { label: `Show only ${base}`, run: () => setFilter(map, tag(base), "include"), alt: () => setFilter(map, tag(base), "exclude") },
+    { label: `Hide ${base}`, run: () => setFilter(map, tag(base), "exclude") },
     ...(ranked ? [
-      { label: `Show only ${key}`, run: () => setFilter(map, key, "include"), alt: () => setFilter(map, key, "exclude") },
-      { label: `Hide ${key}`, run: () => setFilter(map, key, "exclude") },
+      { label: `Show only ${key}`, run: () => setFilter(map, tag(key), "include"), alt: () => setFilter(map, tag(key), "exclude") },
+      { label: `Hide ${key}`, run: () => setFilter(map, tag(key), "exclude") },
     ] : []),
-    ...(resonator && kind === "weapon" ? scopedItems(resonator, "weapon", base) : []),
+    // the weapon's own refines compare, then the ranks it would open shown one at a time
+    ...(resonator && kind === "weapon" ? scopedItems(resonator, "weapon", base).flatMap((it) =>
+      (it.axis === "refines" && row ? [it, ...rankItems(row.run, row.pos)] : [it])) : []),
     ...(resonator && ranked ? scopedItems(resonator, "weaponRank", key) : []),
     ...(resonator && kind === "echo" ? scopedItems(resonator, "echo", key) : []),
     // ...and last, the compares that opened this column, offered back as a way to close it
     ...(filters[axis].includes(resonator) ? [{ label: `Stop comparing ${word}`, run: () => setCompare(resonator, axis) }] : []),
-    // the rank rides in this same cell, so this is where the whole rank axis is opened and closed
-    ...(kind === "weapon" && comparable(resonator, "refines")
-      ? [{
-        label: `${filters.refines.includes(resonator) ? "Stop comparing" : "Compare"} ${AXIS_LABEL.refines.toLowerCase()}`,
-        run: () => setCompare(resonator, "refines"),
-      }] : []),
+    // a refines compare left on from an old link can still be closed here
+    ...(kind === "weapon" && filters.refines.includes(resonator)
+      ? [{ label: `Stop comparing ${AXIS_LABEL.refines.toLowerCase()}`, run: () => setCompare(resonator, "refines") }] : []),
     ...filters.scoped.filter((s) => s.resonator === resonator && s.axis === axis)
       .map((s) => ({ label: `Stop comparing ${scopedLabel(s)} ${word}`, run: () => setScoped(s) })),
   ];
@@ -1063,6 +1504,11 @@ const removeChip = (e: Event): void => {
   if (axis) { setCompare(chip.dataset.resonator ?? "", axis); return; }
   const matrix = chip.dataset.matrix;
   if (matrix) { setMatrix(matrix); return; }
+  const pin = chip.dataset.pin;
+  if (pin) {
+    togglePin(pin);
+    return;
+  }
   const scoped = chip.dataset.scoped;
   if (scoped) { const s = filters.scoped.find((x) => scopedKey(x) === scoped); if (s) setScoped(s); return; }
   const name = chip.dataset.resonator;
@@ -1103,21 +1549,37 @@ document.addEventListener("click", (e) => {
   });
 });
 
+// Clear Pins leaves the filters alone, and Clear Filters the pins
+document.addEventListener("click", (e) => {
+  if (!(e.target as Element).closest(".clearpins")) return;
+  if (!matchMedia("(pointer: coarse)").matches) focusAfterDraw = null;
+  withRowCap(() => {
+    const pins = [...pinnedRows];
+    pinnedRows.clear();
+    return () => {
+      for (const key of pins) pinnedRows.add(key);
+    };
+  }, redrawPins);
+});
+
 /** A bubble's identity across the redraw its own removal starts — its dataset is what makes one,
- *  and Clear Filters has none of its own. */
+ *  and the two Clear buttons have none of their own. */
 const chipSig = (el: HTMLElement): string => (el.classList.contains("clearall") ? "clearall"
-  : [el.dataset.axis, el.dataset.scoped, el.dataset.matrix, el.dataset.kind, el.dataset.resonator, el.dataset.value].join(" "));
+  : el.classList.contains("clearpins") ? "clearpins"
+  : [el.dataset.axis, el.dataset.scoped, el.dataset.matrix, el.dataset.pin, el.dataset.kind, el.dataset.resonator, el.dataset.value].join("\0"));
 /** Where to put the focus once the next redraw is done (`renderComparison`): a bubble by its own
  *  `chipSig`, null for the search bar, undefined to leave the focus wherever it already is. Only
  *  the bar's own flows book one — a checkbox toggled or a filter set from a table menu redraws
  *  without the caret jumping into the bar behind it. */
 let focusAfterDraw: string | null | undefined;
 
+/** Every bubble and both Clear buttons, in page order. */
+const CHIP_RING = ".tcchips .rchip, .tcchips .clearall, .tcpins .rchip, .tcpins .clearpins";
 /** The filter bar's own Tab ring: the search bar, then every bubble it has set, then Clear
- *  Filters, and round again. */
+ *  Filters, the pins and Clear Pins, and round again. */
 const tabRing = (): HTMLElement[] => {
   const search = document.querySelector<HTMLElement>("#optionSearch");
-  return search ? [search, ...document.querySelectorAll<HTMLElement>(".tcchips .rchip, .tcchips .clearall")] : [];
+  return search ? [search, ...document.querySelectorAll<HTMLElement>(CHIP_RING)] : [];
 };
 // Tab walks that ring — from the bar with nothing to walk in it (the hits come first, see below),
 // from a bubble, or with nothing focused at all, which lands on the search bar. From anywhere else
