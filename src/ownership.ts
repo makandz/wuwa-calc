@@ -8,6 +8,7 @@ export const OWNED_LIMITED_CHARACTERS: ReadonlySet<string> = new Set([
   "Phrolova", "Cantarella", "Qiuyuan", "Hsin", "Suisui", "Lucy", "Rebecca", "Denia",
   "Hiyuki", "Sigrika", "Aemeath", "Mornye", "Lynae", "Chisa", "Iuno", "Augusta",
   "Cartethyia", "Ciaccona", "Phoebe", "Carlotta", "Shorekeeper", "Jinhsi", "Yinlin", "Jiyan",
+  "Suoming", "Lucilla",
 ]);
 
 export const ownsCharacter = (r: Pick<Resonator, "name" | "tier">): boolean =>
