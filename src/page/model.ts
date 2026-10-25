@@ -17,6 +17,7 @@ import type { TeamRun } from "../solve/teamrun.js";
 import { teamKey, teamAt, ALL_TEAMS, PRIMARY_TEAM, INTERCHANGEABLE } from "../resonators/teams.js";
 import { DEFAULT_TEAM_COST } from "../costs.js";
 import { ownership, teamOwned, OWNED_PRIMARY_TEAMS } from "../ownership.js";
+import { matrixState } from "../matrix/state.js";
 
 /* ------------------------------------------------------------------------------------ teams */
 
@@ -277,7 +278,7 @@ export function teamWanted(key: string, members: Member[]): boolean {
   // it stands for cost nothing to leave out — except when the name added is an interchangeable
   // support themselves, which asks about them rather than about the pairing, and every group they
   // are the stood-down half of has to answer for them
-  if (!(ownership.onlyOwned ? OWNED_PRIMARY_TEAMS : PRIMARY_TEAMS).has(key)
+  if (!matrixState.enabled && !(ownership.onlyOwned ? OWNED_PRIMARY_TEAMS : PRIMARY_TEAMS).has(key)
     && !members.some((m) => INTERCHANGEABLE.has(m.loadout) && resonatorFilters.get(m.name) === "include")
     && !members.every((m) => INTERCHANGEABLE.has(m.loadout) || resonatorFilters.get(m.name) === "include")) return false;
   for (const [name, mode] of resonatorFilters) if (mode === "exclude" && has(name)) return false;
@@ -384,6 +385,7 @@ function expandTeam(teamKey: string, members: Member[], all = false, f: Filters 
 /** Every row the filters open, then each pinned row they left out, built straight off its key. */
 export function teamRows(): TeamRow[] {
   const rows = Object.entries(TEAMS).flatMap(([key, members]) => expandTeam(key, members));
+  if (matrixState.enabled) return rows;
   const listed = new Set(rows.map((row) => row.key));
   for (const key of pinnedRows) {
     const row = listed.has(key) ? null : rowFromKey(key);
